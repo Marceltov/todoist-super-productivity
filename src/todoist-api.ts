@@ -55,7 +55,7 @@ export const getActiveTasks = async (http: PluginHttp, ids: string[]): Promise<T
   return out;
 };
 
-export interface Completion { task_id: string; completed_at: string }
+export interface Completion { task_id: string; completed_at: string; content?: string }
 
 /** Tasks completed since `sinceIso`, including completions of recurring tasks (confirmed in the live spike). */
 export const getCompletedSince = async (http: PluginHttp, sinceIso: string): Promise<Completion[]> => {
@@ -66,6 +66,7 @@ export const getCompletedSince = async (http: PluginHttp, sinceIso: string): Pro
   return items.map((it) => ({
     task_id: String(it.task_id ?? it.id),
     completed_at: String(it.completed_at ?? ''),
+    ...(typeof it.content === 'string' ? { content: it.content } : {}),
   }));
 };
 
