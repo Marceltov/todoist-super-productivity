@@ -18,11 +18,13 @@ where you plan your day.
 - **Private by design:** the API token stays on your device, in Super Productivity's secret storage, so it is never
   synced or exported.
 
-Requires the Super Productivity **desktop app 20 or newer**.
+Requires Super Productivity **20 or newer**. Tested on the macOS desktop app and the iPhone app (Android not tested
+yet).
 
 ## Install
 
-1. Download `todoist-sync-<version>.zip` from [Releases](../../releases).
+1. Download `todoist-sync-<version>.zip` from [Releases](../../releases). On an iPhone, open the link in Safari; the
+   ZIP is saved to the Files app.
 2. In Super Productivity, go to **Settings → Plugins → Choose Plugin File** and pick the ZIP.
 3. After **updating** the plugin: if it still behaves like the old version, quit Super Productivity completely
    (Cmd+Q / Alt+F4) and open it again.
@@ -47,6 +49,17 @@ Requires the Super Productivity **desktop app 20 or newer**.
    - **Two-Way Sync:** every field syncs **both ways** by default. You can change each field there. Tick
      **Auto-create tags** so labels and projects that don't exist as tags yet are created.
 3. Click **Test Connection**, then **Save**. Your tasks now appear in the Todoist panel. Add them with **+**.
+
+## Several devices
+
+If you sync Super Productivity between devices (for example Mac and iPhone):
+
+- **Install the plugin and enter your Todoist token on every device** where you change Todoist tasks. Todoist has one
+  personal token per account, so it is the same token everywhere, but it is stored on each device and never synced.
+  After resetting the token in Todoist, enter the new one on every device.
+- **Changes made on a device without the plugin are not sent to Todoist.** They do reach your other devices through
+  Super Productivity's sync, but Super Productivity only sends a change to Todoist from the device where it was made.
+  Tick such tasks off in Todoist by hand.
 
 ## Good to know
 
