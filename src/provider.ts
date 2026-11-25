@@ -349,7 +349,8 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
         description:
           'Off by default. Applies after the undo time, also in shared projects, and is permanent: Todoist has no ' +
           'trash. For a recurring task only this occurrence goes: Todoist moves the series to its next date ' +
-          '(the occurrence counts as completed there).',
+          '(the occurrence counts as completed there). With this off and auto-import on, a task you delete here ' +
+          'comes back at the next check, because it is still in Todoist.',
       },
       {
         key: 'checkInterval',

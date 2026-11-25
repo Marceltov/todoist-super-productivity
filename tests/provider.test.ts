@@ -717,6 +717,7 @@ describe('delete in Todoist (opt-in)', () => {
     expect(f.description).toMatch(/permanent/i);
     expect(f.description).toMatch(/recurring/i);
     expect(f.description).toMatch(/next date/i);
+    expect(f.description).toMatch(/comes back/i); // off + auto-import: a locally deleted task is re-imported
   });
 });
 

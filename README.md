@@ -57,6 +57,8 @@ Requires the Super Productivity **desktop app 20 or newer**.
 - **Deleted in Todoist:** the task is marked as removed in Super Productivity. A network error never counts as
   "deleted" or "done".
 - **Deleted in Super Productivity:** Todoist is left alone, unless you turn on *Also delete in Todoist* (see Set up).
+  With that option off and auto-import on, a task you delete comes back at the next check, because it still exists
+  in Todoist and matches your filter.
 - **Moving tasks between projects** isn't synced: Super Productivity's sync interface has no project field. Use the
   project tag to see where a task comes from, and plan in *Today* / *Planner*.
 - **A label named exactly like a project** is treated as the project tag and isn't sent back as a label.
