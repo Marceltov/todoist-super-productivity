@@ -6,7 +6,7 @@ import type {
   PluginSearchResult,
 } from '@super-productivity/plugin-api';
 import { parseInterval, RefreshCache } from './interval';
-import { PROJECT_TAG_PREFIX, parseIssueId, tagsFor, taskUrl, toIssue, toSearchResult, withoutProjectTags } from './mapping';
+import { parseIssueId, tagsFor, taskUrl, toIssue, toSearchResult } from './mapping';
 import { OccurrenceBook } from './occurrences';
 import { todoistHex } from './colors';
 import type { TagStyle } from './tag-style';
@@ -66,7 +66,11 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     return meta!;
   };
 
-  /** Project name per task (for the "#Project" tag), and the Todoist look of the tasks' tags, reported once. */
+  /** Tags that stand for a Todoist project (known project names): display-only, never pushed as labels. */
+  const isProjectTag = (tag: string): boolean => [...(meta?.projects.values() ?? [])].some((p) => p.name === tag);
+  const withoutProjectTags = (tags: string[]): string[] => tags.filter((t) => !isProjectTag(t));
+
+  /** Project name per task (for the project tag), and the Todoist look of the tasks' tags, reported once. */
   const projectNamesFor = async (http: PluginHttp, intervalMs: number, tasks: TodoistTask[]) => {
     if (!tasks.length) return new Map<string, string>();
     const m = await metaFor(http, intervalMs, tasks.map((t) => t.project_id));
@@ -77,7 +81,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
         const project = m.projects.get(t.project_id);
         for (const title of tagsFor(t, project?.name)) {
           if (styles.has(title)) continue;
-          styles.set(title, title.startsWith(PROJECT_TAG_PREFIX)
+          styles.set(title, title === project?.name
             ? { title, color: todoistHex(project?.color), icon: 'tag' }
             : { title, color: todoistHex(m.labelColors.get(title)), icon: 'label' });
         }
@@ -153,7 +157,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       const labels = withoutProjectTags(changes.labels as string[]);
       body.labels = labels;
       const lastTags = (cache.get(id, Infinity)?.labels as string[] | undefined) ?? [];
-      const projectTags = lastTags.filter((t) => t.startsWith(PROJECT_TAG_PREFIX));
+      const projectTags = lastTags.filter(isProjectTag);
       patch.labels = [...labels, ...projectTags];
     }
     if ('durationMs' in changes) {
@@ -316,7 +320,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       mapping('dueDay', 'dueDay', { defaultDirection: 'both', mutuallyExclusive: ['dueWithTime'] }),
       mapping('dueWithTime', 'dueWithTime', { defaultDirection: 'both', mutuallyExclusive: ['dueDay'] }),
       mapping('timeEstimate', 'durationMs', { defaultDirection: 'both' }),
-      // Todoist labels ↔ SP tags; the "#Project" tag is display-only and never becomes a label.
+      // Todoist labels ↔ SP tags; the project tag is display-only and never becomes a label.
       mapping('tagIds', 'labels', {
         defaultDirection: 'both',
         toIssueValue: (v) => withoutProjectTags(Array.isArray(v) ? (v as string[]) : []),

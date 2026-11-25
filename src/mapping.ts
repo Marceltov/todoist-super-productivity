@@ -26,13 +26,11 @@ export const dueFields = (due: TodoistDue | null): { dueDay?: string; dueWithTim
 export const durationMs = (d: TodoistTask['duration']): number =>
   !d ? 0 : d.unit === 'day' ? d.amount * WORK_DAY : d.amount * MINUTE;
 
-/** SP tags for a task: its Todoist labels, plus its project as a "#Project" tag (never pushed back as a label). */
-export const PROJECT_TAG_PREFIX = '#';
+/** SP tags for a task: its Todoist labels, plus its project name as a tag (styled with a # icon, never a label). */
 export const tagsFor = (task: TodoistTask, projectName?: string): string[] => [
   ...(task.labels ?? []),
-  ...(projectName ? [`${PROJECT_TAG_PREFIX}${projectName}`] : []),
+  ...(projectName && !(task.labels ?? []).includes(projectName) ? [projectName] : []),
 ];
-export const withoutProjectTags = (tags: string[]): string[] => tags.filter((t) => !t.startsWith(PROJECT_TAG_PREFIX));
 
 export const toIssue = (task: TodoistTask, issueId: string, checked: boolean, projectName?: string): PluginIssue => ({
   id: issueId,

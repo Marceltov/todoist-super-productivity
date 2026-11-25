@@ -443,16 +443,16 @@ describe('push title and estimate', () => {
 describe('tags', () => {
   const projects = [{ id: 'p1', name: 'Household' }, { id: 'p2', name: 'Shared' }];
 
-  test('refresh: Todoist labels plus the project as #tag', async () => {
+  test('refresh: Todoist labels plus the project name as tag', async () => {
     const { provider } = await setup();
     const { http } = fakeHttp(todoist({ active: [task({ id: '1', labels: ['errands'] })], projects }));
-    expect((await provider.getByIds!(['1'], cfg(), http))[0].labels).toEqual(['errands', '#Household']);
+    expect((await provider.getByIds!(['1'], cfg(), http))[0].labels).toEqual(['errands', 'Household']);
   });
 
-  test('search results carry labels and #project for the tags on import', async () => {
+  test('search results carry labels and the project tag for the tags on import', async () => {
     const { provider } = await setup();
     const { http } = fakeHttp(todoist({ filter: [task({ id: '1', project_id: 'p2', labels: ['phone'] })], projects }));
-    expect((await provider.searchIssues('', cfg(), http))[0].labels).toEqual(['phone', '#Shared']);
+    expect((await provider.searchIssues('', cfg(), http))[0].labels).toEqual(['phone', 'Shared']);
   });
 
   test('project names are fetched once per interval', async () => {
@@ -463,18 +463,20 @@ describe('tags', () => {
     expect(calls.filter((c) => c.url.endsWith('/projects'))).toHaveLength(1);
   });
 
-  test('tag mapping: both ways; #project tags never become Todoist labels', async () => {
+  test('tag mapping: both ways; project tags (known project names) never become Todoist labels', async () => {
     const { provider } = await setup();
+    await provider.getByIds!(['1'], cfg(), fakeHttp(todoist({ active: [task({ id: '1' })], projects })).http);
     const m = provider.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
     expect(m).toMatchObject({ issueField: 'labels', defaultDirection: 'both' });
-    expect(m.toIssueValue(['#Household', 'errands'], { issueId: '1' })).toEqual(['errands']);
-    expect(m.toTaskValue(['errands', '#Household'], { issueId: '1' })).toEqual(['errands', '#Household']);
+    expect(m.toIssueValue(['Household', 'errands'], { issueId: '1' })).toEqual(['errands']);
+    expect(m.toTaskValue(['errands', 'Household'], { issueId: '1' })).toEqual(['errands', 'Household']);
   });
 
-  test('pushing tags sets the Todoist labels without #project tags', async () => {
+  test('pushing tags sets the Todoist labels without project tags', async () => {
     const { provider } = await setup();
+    await provider.getByIds!(['9'], cfg(), fakeHttp(todoist({ active: [task({ id: '9' })], projects })).http);
     const { http, calls } = fakeHttp(() => null);
-    await provider.updateIssue!('9', { labels: ['errands', 'phone'] }, cfg(), http);
+    await provider.updateIssue!('9', { labels: ['errands', 'Household', 'phone'] }, cfg(), http);
     expect(calls.map((c) => [c.url, c.body])).toEqual([[`${API}/tasks/9`, { labels: ['errands', 'phone'] }]]);
   });
 });
@@ -491,7 +493,7 @@ describe('todoist-themed tags', () => {
     expect(styled.at(-1)).toEqual([
       { title: 'errands', color: '#4073ff', icon: 'label' },
       { title: 'shared-only', color: '#808080', icon: 'label' },
-      { title: '#Household', color: '#b8256f', icon: 'tag' },
+      { title: 'Household', color: '#b8256f', icon: 'tag' },
     ]);
   });
 

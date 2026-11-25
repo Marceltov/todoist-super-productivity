@@ -10,12 +10,12 @@ test('todoistHex maps Todoist colour names, unknown → charcoal', () => {
 
 test('tagUpdates only touches tags whose colour or icon differ', () => {
   const existing = [
-    { id: 't1', title: '#Household', color: '#aaaaaa', icon: null },
+    { id: 't1', title: 'Household', color: '#aaaaaa', icon: null },
     { id: 't2', title: 'errands', color: '#808080', icon: 'label' },
     { id: 't3', title: 'mine', color: '#123456', icon: 'star' },
   ];
   const styles = [
-    { title: '#Household', color: '#b8256f', icon: 'tag' },
+    { title: 'Household', color: '#b8256f', icon: 'tag' },
     { title: 'errands', color: '#808080', icon: 'label' },
     { title: 'not-yet-created', color: '#808080', icon: 'label' },
   ];
