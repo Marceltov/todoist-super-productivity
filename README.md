@@ -24,13 +24,16 @@ Requires the Super Productivity **desktop app 20 or newer**.
 
 1. Download `todoist-sync-<version>.zip` from [Releases](../../releases).
 2. In Super Productivity, go to **Settings → Plugins → Choose Plugin File** and pick the ZIP.
-3. **Quit Super Productivity completely (Cmd+Q / Alt+F4) and open it again.** This is also needed after every
-   update; otherwise the old plugin code keeps running.
+3. After **updating** the plugin: if it still behaves like the old version, quit Super Productivity completely
+   (Cmd+Q / Alt+F4) and open it again.
 
 ## Set up
 
 1. **Token:** in Settings → Plugins → Todoist, click **⚙** and paste your personal API token. You find it in Todoist
    under *Settings → Integrations → Developer*.
+
+   ![The Todoist plugin card in Super Productivity's settings, with the gear button highlighted](docs/images/plugin-settings.png)
+
 2. **Add the integration:** in the right panel, click **+** and then **Todoist**.
    - **Todoist filter (optional):** leave it empty for "tasks assigned to me, plus unassigned tasks in my own
      projects" (`assigned to: me | (!assigned & !shared)`), or enter any
