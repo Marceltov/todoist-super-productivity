@@ -1,4 +1,4 @@
-import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, updateTask, reopenTask, searchQuery, withRetry } from '../src/todoist-api';
+import { closeTask, deleteTask, filterTasks, getActiveTasks, getProjects, getTask, updateTask, reopenTask, searchQuery, withRetry } from '../src/todoist-api';
 import { fakeHttp, httpError } from './fake-http';
 import { task } from './factories';
 
@@ -86,4 +86,12 @@ test('updateTask posts the body to /tasks/{id}', async () => {
   const { http, calls } = fakeHttp(() => null);
   await updateTask(http, '9', { due_date: '2026-12-03' });
   expect(calls[0]).toMatchObject({ method: 'POST', url: `${API}/tasks/9`, body: { due_date: '2026-12-03' } });
+});
+
+test('deleteTask sends DELETE /tasks/{id}; an already deleted task (404) is fine', async () => {
+  const { http, calls } = fakeHttp(() => null);
+  await deleteTask(http, '9');
+  expect(calls[0]).toMatchObject({ method: 'DELETE', url: `${API}/tasks/9` });
+  await expect(deleteTask(fakeHttp(() => { throw httpError(404); }).http, '9')).resolves.toBeUndefined();
+  await expect(deleteTask(fakeHttp(() => { throw httpError(500); }).http, '9')).rejects.toThrow('HTTP 500');
 });

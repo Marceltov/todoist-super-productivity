@@ -10,7 +10,7 @@ import { parseIssueId, tagsFor, taskUrl, toIssue, toSearchResult } from './mappi
 import { OccurrenceBook, type Storage } from './occurrences';
 import { todoistHex } from './colors';
 import type { TagStyle } from './tag-style';
-import { closeTask, filterTasks, getActiveTasks, getLabels, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
+import { closeTask, deleteTask, filterTasks, getActiveTasks, getLabels, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
 import type { TodoistSyncConfig, TodoistTask } from './types';
 
 export interface ProviderDeps {
@@ -336,6 +336,14 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
           (await getProjects(http)).map((p) => ({ label: p.name, value: p.id })),
       },
       {
+        key: 'isDeleteInTodoist',
+        type: 'checkbox',
+        label: 'Also delete in Todoist when I delete a task here',
+        description:
+          'Off by default. Applies after the undo time, also in shared projects, and is permanent: Todoist has no ' +
+          'trash. Recurring tasks are never deleted, because that would delete the whole series.',
+      },
+      {
         key: 'checkInterval',
         type: 'input',
         label: 'Check Todoist every',
@@ -439,6 +447,14 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     }),
 
     deletedStates: ['deleted'],
+
+    /** SP calls this after its undo window when a linked task is deleted. Opt-in; never for recurring tasks. */
+    async deleteIssue(id, config, http) {
+      if (!(config as TodoistSyncConfig).isDeleteInTodoist) return;
+      const { taskId, occurrence } = parseIssueId(id);
+      if (occurrence) return; // deleting one occurrence would delete the whole series in Todoist
+      await deleteTask(http, taskId);
+    },
 
     async updateIssue(id, changes, _config, http) {
       const { taskId, occurrence } = parseIssueId(id);

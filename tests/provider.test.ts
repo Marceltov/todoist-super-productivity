@@ -644,6 +644,38 @@ describe('minor fixes', () => {
   });
 });
 
+describe('delete in Todoist (opt-in)', () => {
+  test('off by default: deleting in SP leaves Todoist alone', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.deleteIssue!('9', cfg(), http);
+    expect(calls).toHaveLength(0);
+  });
+
+  test('when enabled, the Todoist task is deleted', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.deleteIssue!('9', cfg({ isDeleteInTodoist: true }), http);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([`DELETE ${API}/tasks/9`]);
+  });
+
+  test('never for recurring tasks: that would delete the whole series', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.deleteIssue!('5@2026-11-30', cfg({ isDeleteInTodoist: true }), http);
+    expect(calls).toHaveLength(0);
+  });
+
+  test('has an opt-in checkbox that explains the guard rails', async () => {
+    const { provider } = await setup();
+    const f = provider.configFields.find((x) => x.key === 'isDeleteInTodoist')!;
+    expect(f.type).toBe('checkbox');
+    expect(f.label).toBe('Also delete in Todoist when I delete a task here');
+    expect(f.description).toMatch(/permanent/i);
+    expect(f.description).toMatch(/recurring/i);
+  });
+});
+
 describe('definition', () => {
   test('field mappings: everything both ways by default, no notes', async () => {
     const { provider } = await setup();

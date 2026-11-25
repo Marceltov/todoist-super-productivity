@@ -39,6 +39,9 @@ Requires the Super Productivity **desktop app 20 or newer**.
      projects" (`assigned to: me | (!assigned & !shared)`), or enter any
      [Todoist filter](https://todoist.com/help/articles/introduction-to-filters-V98wIH).
    - **Projects:** limit the import to some Todoist projects. Leave it empty for all.
+   - **Also delete in Todoist when I delete a task here:** off by default. When on, deleting a linked task in Super
+     Productivity deletes it in Todoist after the undo time, also in shared projects. This is permanent, because
+     Todoist has no trash. Recurring tasks are never deleted, because that would delete the whole series.
    - **Check Todoist every:** for example `5m` or `1h 30m` (default 5 minutes, minimum 1 minute).
    - **Two-Way Sync:** every field syncs **both ways** by default. You can change each field there. Tick
      **Auto-create tags** so labels and projects that don't exist as tags yet are created.
@@ -52,6 +55,7 @@ Requires the Super Productivity **desktop app 20 or newer**.
   that would end the series. Un-ticking a completed occurrence doesn't reopen anything in Todoist.
 - **Deleted in Todoist:** the task is marked as removed in Super Productivity. A network error never counts as
   "deleted" or "done".
+- **Deleted in Super Productivity:** Todoist is left alone, unless you turn on *Also delete in Todoist* (see Set up).
 - **Moving tasks between projects** isn't synced: Super Productivity's sync interface has no project field. Use the
   project tag to see where a task comes from, and plan in *Today* / *Planner*.
 - **A label named exactly like a project** is treated as the project tag and isn't sent back as a label.
