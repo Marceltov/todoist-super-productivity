@@ -17,7 +17,8 @@ export interface ProviderDeps {
   cache: RefreshCache;
 }
 
-const DEFAULT_FILTER = 'assigned to: me';
+// Tasks assigned to me, plus unassigned tasks in my own (non-shared) projects. Verified live 2026-11-25.
+const DEFAULT_FILTER = 'assigned to: me | (!assigned & !shared)';
 
 const settings = (config: Record<string, unknown>) => {
   const c = config as TodoistSyncConfig;

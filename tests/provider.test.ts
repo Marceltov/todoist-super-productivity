@@ -82,11 +82,11 @@ describe('import', () => {
     expect(calls).toHaveLength(2);
   });
 
-  test('empty filter setting uses the default "assigned to: me"', async () => {
+  test('empty filter setting uses the default: mine, plus unassigned in my own projects', async () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(todoist({}));
     await provider.getNewIssuesForBacklog!(cfg({ filterQuery: '' }), http);
-    expect(calls[0].params!.query).toBe('assigned to: me');
+    expect(calls[0].params!.query).toBe('assigned to: me | (!assigned & !shared)');
   });
 
   test('project selection filters backlog and search; empty selection keeps all', async () => {
