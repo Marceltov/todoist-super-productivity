@@ -1,0 +1,29 @@
+{
+  "id": "todoist-sync",
+  "name": "Todoist",
+  "version": "0.1.0",
+  "manifestVersion": 1,
+  "minSupVersion": "20.0.0",
+  "description": "Live Todoist sync: import tasks by filter and project, tick them off in Super Productivity to complete them in Todoist.",
+  "author": "Marcel Bruckner",
+  "type": "issueProvider",
+  "icon": "icon.svg",
+  "iFrame": false,
+  "permissions": [],
+  "hooks": [],
+  "dataSharing": [
+    {
+      "recipient": "Todoist",
+      "hosts": ["api.todoist.com"],
+      "data": ["credentials", "userText", "ids", "taskStatus"],
+      "privacyPolicyUrl": "https://doist.com/privacy"
+    }
+  ],
+  "issueProvider": {
+    "pollIntervalMs": 60000,
+    "icon": "calendar",
+    "humanReadableName": "Todoist",
+    "defaultAutoAddToBacklog": true,
+    "issueStrings": { "singular": "Task", "plural": "Tasks" }
+  }
+}
