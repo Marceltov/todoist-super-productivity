@@ -6,7 +6,7 @@ import type {
   PluginSearchResult,
 } from '@super-productivity/plugin-api';
 import { parseInterval, RefreshCache } from './interval';
-import { parseIssueId, taskUrl, toIssue, toSearchResult } from './mapping';
+import { PROJECT_TAG_PREFIX, parseIssueId, taskUrl, toIssue, toSearchResult, withoutProjectTags } from './mapping';
 import { OccurrenceBook } from './occurrences';
 import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
 import type { TodoistSyncConfig, TodoistTask } from './types';
@@ -41,11 +41,21 @@ const mapping = (taskField: PluginFieldMapping['taskField'], issueField: string,
   ...extra,
 });
 
-const SYNC_FIELDS = ['checked', 'content', 'dueDay', 'dueWithTime', 'durationMs'] as const;
+const SYNC_FIELDS = ['checked', 'content', 'dueDay', 'dueWithTime', 'durationMs', 'labels'] as const;
 
 export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinition {
   const { book, cache } = deps;
   let backlogKey = '';
+  let projectNames: { at: number; byId: Map<string, string> } | undefined;
+
+  /** Project id → name, for the "#Project" tag. Fetched at most once per check interval (or for an unknown id). */
+  const namesFor = async (http: PluginHttp, intervalMs: number, ids: string[]): Promise<Map<string, string>> => {
+    const stale = !projectNames || Date.now() - projectNames.at >= intervalMs;
+    if (stale || ids.some((id) => !projectNames!.byId.has(id))) {
+      projectNames = { at: Date.now(), byId: new Map((await getProjects(http)).map((p) => [p.id, p.name] as const)) };
+    }
+    return projectNames!.byId;
+  };
 
   /** A task Todoist deleted. Keeps the last known fields so the title mapping never blanks the SP title. */
   const deletedIssue = (id: string): PluginIssue => {
@@ -109,6 +119,13 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       body.content = changes.content;
       Object.assign(patch, { content: changes.content, title: changes.content });
     }
+    if (Array.isArray(changes.labels)) {
+      const labels = withoutProjectTags(changes.labels as string[]);
+      body.labels = labels;
+      const lastTags = (cache.get(id, Infinity)?.labels as string[] | undefined) ?? [];
+      const projectTags = lastTags.filter((t) => t.startsWith(PROJECT_TAG_PREFIX));
+      patch.labels = [...labels, ...projectTags];
+    }
     if ('durationMs' in changes) {
       const ms = Number(changes.durationMs) || 0;
       Object.assign(body, ms > 0 ? { duration: Math.max(1, Math.round(ms / 60_000)), duration_unit: 'minute' } : { duration: null });
@@ -135,7 +152,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     if (last && Object.keys(patch).length > 0) cache.set({ ...last, ...patch });
   };
 
-  const fetchIssues = async (ids: string[], http: PluginHttp): Promise<PluginIssue[]> => {
+  const fetchIssues = async (ids: string[], http: PluginHttp, intervalMs: number): Promise<PluginIssue[]> => {
     const parsed = ids.map((id) => ({ id, ...parseIssueId(id) }));
     const taskIds = [...new Set(parsed.map((p) => p.taskId))];
     const live = new Map((await getActiveTasks(http, taskIds)).map((t) => [t.id, t] as const));
@@ -143,13 +160,15 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     const missing = taskIds.filter((id) => !live.has(id));
     const looked = await Promise.all(missing.map(async (id) => [id, await getTask(http, id)] as const));
     const closedOrGone = new Map(looked);
+    const found = [...live.values(), ...looked.flatMap(([, t]) => (t ? [t] : []))];
+    const names = found.length ? await namesFor(http, intervalMs, found.map((t) => t.project_id)) : new Map<string, string>();
 
     return parsed.map(({ id, taskId, occurrence }) => {
       const t = live.get(taskId) ?? closedOrGone.get(taskId) ?? undefined;
       let issue: PluginIssue;
       if (!t) issue = deletedIssue(id);
-      else if (occurrence) issue = toIssue(t, id, book.resolve(id, t) === 'done');
-      else issue = toIssue(t, id, t.checked);
+      else if (occurrence) issue = toIssue(t, id, book.resolve(id, t) === 'done', names.get(t.project_id));
+      else issue = toIssue(t, id, t.checked, names.get(t.project_id));
       cache.set(issue);
       return issue;
     });
@@ -158,7 +177,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
   const getByIds = async (ids: string[], config: Record<string, unknown>, http: PluginHttp): Promise<PluginIssue[]> => {
     const { intervalMs } = settings(config);
     const stale = ids.filter((id) => !cache.get(id, intervalMs));
-    const fetched = stale.length ? await fetchIssues(stale, http) : [];
+    const fetched = stale.length ? await fetchIssues(stale, http, intervalMs) : [];
     const byId = new Map(fetched.map((i) => [i.id, i] as const));
     return ids.map((id) => byId.get(id) ?? cache.get(id, Infinity)).filter((i): i is PluginIssue => !!i);
   };
@@ -211,11 +230,12 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     },
 
     async searchIssues(term, config, http) {
-      const { filter, projectIds } = settings(config);
+      const { filter, projectIds, intervalMs } = settings(config);
       const tasks = (await filterTasks(http, searchQuery(filter, term))).filter(inProjects(projectIds));
+      const names = tasks.length ? await namesFor(http, intervalMs, tasks.map((t) => t.project_id)) : new Map();
       return tasks.flatMap((t): PluginSearchResult[] => {
         const id = t.due?.is_recurring ? book.peekId(t) : t.id;
-        return id ? [toSearchResult(t, id)] : [];
+        return id ? [toSearchResult(t, id, names.get(t.project_id))] : [];
       });
     },
 
@@ -225,9 +245,10 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       const cached = key === backlogKey ? cache.getBacklog(intervalMs) : undefined;
       if (cached) return cached;
       const tasks = (await filterTasks(http, filter)).filter(inProjects(projectIds));
+      const names = tasks.length ? await namesFor(http, intervalMs, tasks.map((t) => t.project_id)) : new Map();
       const results = tasks.flatMap((t): PluginSearchResult[] => {
         const id = t.due?.is_recurring ? book.idToImport(t) : t.id;
-        return id ? [toSearchResult(t, id)] : [];
+        return id ? [toSearchResult(t, id, names.get(t.project_id))] : [];
       });
       backlogKey = key;
       cache.setBacklog(results);
@@ -265,6 +286,12 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       mapping('dueDay', 'dueDay', { defaultDirection: 'both', mutuallyExclusive: ['dueWithTime'] }),
       mapping('dueWithTime', 'dueWithTime', { defaultDirection: 'both', mutuallyExclusive: ['dueDay'] }),
       mapping('timeEstimate', 'durationMs', { defaultDirection: 'both' }),
+      // Todoist labels ↔ SP tags; the "#Project" tag is display-only and never becomes a label.
+      mapping('tagIds', 'labels', {
+        defaultDirection: 'both',
+        toIssueValue: (v) => withoutProjectTags(Array.isArray(v) ? (v as string[]) : []),
+        toTaskValue: (v) => (Array.isArray(v) ? v : []),
+      }),
     ],
 
     extractSyncValues: (issue) => Object.fromEntries(SYNC_FIELDS.map((f) => [f, issue[f]])),

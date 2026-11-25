@@ -20,6 +20,7 @@ export interface TodoistTask {
   project_id: string;
   /** Increments on every completion, also for recurring tasks (verified live 2026-11-25). */
   completed_count?: number;
+  labels?: string[];
 }
 
 /** Non-secret provider settings, as SP stores them in the synced provider config. */

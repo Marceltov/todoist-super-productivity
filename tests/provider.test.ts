@@ -88,15 +88,16 @@ describe('import', () => {
     const r = await provider.searchIssues('milk', cfg(), http);
     await provider.searchIssues('milk', cfg(), http);
     expect(r).toEqual([expect.objectContaining({ id: '1', title: 'Milk' })]);
-    expect(calls[0].params!.query).toBe('(assigned to: me) & search: milk');
-    expect(calls).toHaveLength(2);
+    const filterCalls = calls.filter((c) => c.url.endsWith('/tasks/filter'));
+    expect(filterCalls[0].params!.query).toBe('(assigned to: me) & search: milk');
+    expect(filterCalls).toHaveLength(2);
   });
 
   test('empty filter setting uses the default: mine, plus unassigned in my own projects', async () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(todoist({}));
     await provider.getNewIssuesForBacklog!(cfg({ filterQuery: '' }), http);
-    expect(calls[0].params!.query).toBe('assigned to: me | (!assigned & !shared)');
+    expect(calls.find((c) => c.url.endsWith('/tasks/filter'))!.params!.query).toBe('assigned to: me | (!assigned & !shared)');
   });
 
   test('project selection filters backlog and search; empty selection keeps all', async () => {
@@ -116,10 +117,10 @@ describe('import', () => {
     await provider.getNewIssuesForBacklog!(cfg(), http);
     now = 299_000;
     await provider.getNewIssuesForBacklog!(cfg(), http);
-    expect(calls).toHaveLength(1);
+    expect(calls.filter((c) => c.url.includes('/tasks'))).toHaveLength(1);
     now = 300_000;
     await provider.getNewIssuesForBacklog!(cfg(), http);
-    expect(calls).toHaveLength(2);
+    expect(calls.filter((c) => c.url.includes('/tasks'))).toHaveLength(2);
   });
 
   test('recurring: backlog imports one occurrence; search does not block it', async () => {
@@ -146,7 +147,7 @@ describe('baseline on add', () => {
     const { http } = fakeHttp(todoist({ filter: [t] }));
     for (const [r] of [await provider.searchIssues('', cfg(), http), await provider.getNewIssuesForBacklog!(cfg(), http)]) {
       expect(provider.extractSyncValues!(r as never)).toEqual({
-        checked: false, content: 'Milk', dueDay: '2026-11-30', dueWithTime: undefined, durationMs: 1_800_000,
+        checked: false, content: 'Milk', dueDay: '2026-11-30', dueWithTime: undefined, durationMs: 1_800_000, labels: [],
       });
       expect(r).toMatchObject({ lastUpdated: Date.parse('2026-11-25T10:00:00Z') });
     }
@@ -162,7 +163,7 @@ describe('refresh', () => {
     expect(i).toMatchObject({ id: '1', title: 'Milk', checked: false, dueDay: '2026-11-30' });
     now = 1000;
     await provider.getByIds!(['1'], cfg(), http);
-    expect(calls).toHaveLength(1);
+    expect(calls.filter((c) => c.url.includes('/tasks'))).toHaveLength(1);
   });
 
   test('getById returns one issue, throws when nothing comes back', async () => {
@@ -216,7 +217,7 @@ describe('refresh', () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-11-30')] }));
     await provider.getByIds!(['5@2026-11-30'], cfg(), http);
-    expect(calls).toHaveLength(1);
+    expect(calls.filter((c) => c.url.includes('/tasks'))).toHaveLength(1);
   });
 });
 
@@ -434,6 +435,45 @@ describe('push title and estimate', () => {
   });
 });
 
+describe('tags', () => {
+  const projects = [{ id: 'p1', name: 'Household' }, { id: 'p2', name: 'Shared' }];
+
+  test('refresh: Todoist labels plus the project as #tag', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ active: [task({ id: '1', labels: ['errands'] })], projects }));
+    expect((await provider.getByIds!(['1'], cfg(), http))[0].labels).toEqual(['errands', '#Household']);
+  });
+
+  test('search results carry labels and #project for the tags on import', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ filter: [task({ id: '1', project_id: 'p2', labels: ['phone'] })], projects }));
+    expect((await provider.searchIssues('', cfg(), http))[0].labels).toEqual(['phone', '#Shared']);
+  });
+
+  test('project names are fetched once per interval', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(todoist({ active: [task({ id: '1' }), task({ id: '2' })], projects }));
+    await provider.getByIds!(['1'], cfg(), http);
+    await provider.getByIds!(['2'], cfg(), http);
+    expect(calls.filter((c) => c.url.endsWith('/projects'))).toHaveLength(1);
+  });
+
+  test('tag mapping: both ways; #project tags never become Todoist labels', async () => {
+    const { provider } = await setup();
+    const m = provider.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
+    expect(m).toMatchObject({ issueField: 'labels', defaultDirection: 'both' });
+    expect(m.toIssueValue(['#Household', 'errands'], { issueId: '1' })).toEqual(['errands']);
+    expect(m.toTaskValue(['errands', '#Household'], { issueId: '1' })).toEqual(['errands', '#Household']);
+  });
+
+  test('pushing tags sets the Todoist labels without #project tags', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { labels: ['errands', 'phone'] }, cfg(), http);
+    expect(calls.map((c) => [c.url, c.body])).toEqual([[`${API}/tasks/9`, { labels: ['errands', 'phone'] }]]);
+  });
+});
+
 describe('definition', () => {
   test('field mappings: everything both ways by default, no notes', async () => {
     const { provider } = await setup();
@@ -451,7 +491,7 @@ describe('definition', () => {
   test('extractSyncValues and issue link', async () => {
     const { provider } = await setup();
     expect(Object.keys(provider.extractSyncValues!({ id: '1', title: 'x' })).sort())
-      .toEqual(['checked', 'content', 'dueDay', 'dueWithTime', 'durationMs']);
+      .toEqual(['checked', 'content', 'dueDay', 'dueWithTime', 'durationMs', 'labels']);
     expect(provider.getIssueLink('5@2026-11-30', cfg())).toBe('https://app.todoist.com/app/task/5');
   });
 });

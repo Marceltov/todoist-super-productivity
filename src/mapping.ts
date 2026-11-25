@@ -26,7 +26,15 @@ export const dueFields = (due: TodoistDue | null): { dueDay?: string; dueWithTim
 export const durationMs = (d: TodoistTask['duration']): number =>
   !d ? 0 : d.unit === 'day' ? d.amount * WORK_DAY : d.amount * MINUTE;
 
-export const toIssue = (task: TodoistTask, issueId: string, checked: boolean): PluginIssue => ({
+/** SP tags for a task: its Todoist labels, plus its project as a "#Project" tag (never pushed back as a label). */
+export const PROJECT_TAG_PREFIX = '#';
+export const tagsFor = (task: TodoistTask, projectName?: string): string[] => [
+  ...(task.labels ?? []),
+  ...(projectName ? [`${PROJECT_TAG_PREFIX}${projectName}`] : []),
+];
+export const withoutProjectTags = (tags: string[]): string[] => tags.filter((t) => !t.startsWith(PROJECT_TAG_PREFIX));
+
+export const toIssue = (task: TodoistTask, issueId: string, checked: boolean, projectName?: string): PluginIssue => ({
   id: issueId,
   title: task.content,
   content: task.content,
@@ -40,11 +48,12 @@ export const toIssue = (task: TodoistTask, issueId: string, checked: boolean): P
   durationMs: durationMs(task.duration),
   dueText: task.due?.string ?? '',
   isRecurring: task.due?.is_recurring ? 'yes' : '',
+  labels: tagsFor(task, projectName),
 });
 
 /**
  * A search/backlog result carries every field of a full issue: SP stores the synced fields of what was added as the
  * push baseline, and with an empty baseline it skips pushes until the next refresh.
  */
-export const toSearchResult = (task: TodoistTask, id: string = issueIdFor(task)): PluginSearchResult =>
-  toIssue(task, id, task.checked);
+export const toSearchResult = (task: TodoistTask, id: string = issueIdFor(task), projectName?: string): PluginSearchResult =>
+  toIssue(task, id, task.checked, projectName);
