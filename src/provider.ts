@@ -299,6 +299,8 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     deletedStates: ['deleted'],
 
     async updateIssue(id, changes, _config, http) {
+      // Field names only (no values): shows in the developer console whether SP asked for a push at all.
+      console.info('[todoist-sync] push', id, Object.keys(changes).join(', '));
       const { taskId, occurrence } = parseIssueId(id);
       await pushFields(id, taskId, occurrence, changes, http);
       if ('checked' in changes) await pushDone(id, taskId, occurrence, Boolean(changes.checked), http);
