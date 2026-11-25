@@ -23,7 +23,7 @@
     "pollIntervalMs": 60000,
     "icon": "calendar",
     "humanReadableName": "Todoist",
-    "defaultAutoAddToBacklog": true,
+    "defaultAutoAddToBacklog": false,
     "issueStrings": { "singular": "Task", "plural": "Tasks" }
   }
 }
