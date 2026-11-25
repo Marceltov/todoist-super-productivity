@@ -1,4 +1,4 @@
-import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, reopenTask, searchQuery, withRetry } from '../src/todoist-api';
+import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, updateTask, reopenTask, searchQuery, withRetry } from '../src/todoist-api';
 import { fakeHttp, httpError } from './fake-http';
 import { task } from './factories';
 
@@ -80,4 +80,10 @@ test('withRetry retries once after 429 with Retry-After 1', async () => {
 
 test('withRetry rethrows other errors immediately', async () => {
   await expect(withRetry(async () => { throw httpError(500); })).rejects.toThrow('HTTP 500');
+});
+
+test('updateTask posts the body to /tasks/{id}', async () => {
+  const { http, calls } = fakeHttp(() => null);
+  await updateTask(http, '9', { due_date: '2026-12-03' });
+  expect(calls[0]).toMatchObject({ method: 'POST', url: `${API}/tasks/9`, body: { due_date: '2026-12-03' } });
 });

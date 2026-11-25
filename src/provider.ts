@@ -8,7 +8,7 @@ import type {
 import { parseInterval, RefreshCache } from './interval';
 import { parseIssueId, taskUrl, toIssue, toSearchResult } from './mapping';
 import { OccurrenceBook } from './occurrences';
-import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, reopenTask, searchQuery } from './todoist-api';
+import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, reopenTask, searchQuery, updateTask } from './todoist-api';
 import type { TodoistSyncConfig, TodoistTask } from './types';
 
 export interface ProviderDeps {
@@ -63,6 +63,45 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
   const rememberPush = (id: string, checked: boolean) => {
     const last = cache.get(id, Infinity);
     if (last) cache.set({ ...last, checked, state: checked ? 'done' : 'open' });
+  };
+
+  const pushDone = async (id: string, taskId: string, occurrence: string | undefined, checked: boolean, http: PluginHttp) => {
+    if (occurrence) {
+      if (!checked) return; // reopening a recurring task would touch the shared list unpredictably
+      const [live] = await getActiveTasks(http, [taskId]);
+      if (live && !live.checked && live.due?.date.slice(0, 10) === occurrence) await closeTask(http, taskId);
+      await book.markCompleted(id);
+    } else if (checked) {
+      await closeTask(http, taskId);
+    } else {
+      await reopenTask(http, taskId);
+    }
+    rememberPush(id, checked);
+  };
+
+  /** SP planned (or unplanned) the task: mirror it in Todoist. A time wins over a day; clearing one half of the
+   *  mutually exclusive pair while the other is still set is not a removal. */
+  const pushDue = async (id: string, taskId: string, changes: Record<string, unknown>, http: PluginHttp) => {
+    const last = cache.get(id, Infinity);
+    const time = changes.dueWithTime;
+    const day = changes.dueDay;
+    let body: Record<string, unknown>;
+    let next: { dueDay?: string; dueWithTime?: number } = {};
+    if (typeof time === 'number' && time > 0) {
+      body = { due_datetime: new Date(time).toISOString() };
+      next = { dueWithTime: time };
+    } else if (typeof day === 'string' && day) {
+      body = { due_date: day };
+      next = { dueDay: day };
+    } else {
+      const otherStillSet = 'dueDay' in changes
+        ? !('dueWithTime' in changes) && !!last?.dueWithTime
+        : !!last?.dueDay;
+      if (otherStillSet) return;
+      body = { due_string: 'no date' };
+    }
+    await updateTask(http, taskId, body);
+    if (last) cache.set({ ...last, dueDay: next.dueDay, dueWithTime: next.dueWithTime });
   };
 
   const fetchIssues = async (ids: string[], http: PluginHttp): Promise<PluginIssue[]> => {
@@ -188,8 +227,10 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
         toTaskValue: (v) => Boolean(v),
       },
       pullOnly('title', 'content'),
-      pullOnly('dueDay', 'dueDay', { mutuallyExclusive: ['dueWithTime'] }),
-      pullOnly('dueWithTime', 'dueWithTime', { mutuallyExclusive: ['dueDay'] }),
+      // Dates sync both ways by default (Marcel: planning in SP should show in the shared Todoist list).
+      // Users can change the direction per field in the integration's Two-Way Sync section.
+      pullOnly('dueDay', 'dueDay', { defaultDirection: 'both', mutuallyExclusive: ['dueWithTime'] }),
+      pullOnly('dueWithTime', 'dueWithTime', { defaultDirection: 'both', mutuallyExclusive: ['dueDay'] }),
       pullOnly('timeEstimate', 'durationMs'),
     ],
 
@@ -198,20 +239,10 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     deletedStates: ['deleted'],
 
     async updateIssue(id, changes, _config, http) {
-      if (!('checked' in changes)) return; // only done-ness is ever pushed
-      const checked = Boolean(changes.checked);
       const { taskId, occurrence } = parseIssueId(id);
-      if (occurrence) {
-        if (!checked) return; // reopening a recurring task would touch the shared list unpredictably
-        const [live] = await getActiveTasks(http, [taskId]);
-        if (live && !live.checked && live.due?.date.slice(0, 10) === occurrence) await closeTask(http, taskId);
-        await book.markCompleted(id);
-      } else if (checked) {
-        await closeTask(http, taskId);
-      } else {
-        await reopenTask(http, taskId);
-      }
-      rememberPush(id, checked);
+      // Dates: never for recurring tasks, because setting a date through the API drops the recurrence.
+      if (!occurrence && ('dueDay' in changes || 'dueWithTime' in changes)) await pushDue(id, taskId, changes, http);
+      if ('checked' in changes) await pushDone(id, taskId, occurrence, Boolean(changes.checked), http);
     },
   };
 }

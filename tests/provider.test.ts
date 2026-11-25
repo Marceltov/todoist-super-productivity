@@ -205,10 +205,10 @@ describe('push', () => {
     expect(calls.map((c) => c.url)).toEqual([`${API}/tasks/9/close`, `${API}/tasks/9/reopen`]);
   });
 
-  test('updateIssue ignores non-checked changes', async () => {
+  test('updateIssue ignores fields it does not push (title, estimate)', async () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(() => null);
-    await provider.updateIssue!('9', { content: 'x', dueDay: '2026-12-01' }, cfg(), http);
+    await provider.updateIssue!('9', { content: 'x', durationMs: 60_000 }, cfg(), http);
     expect(calls).toHaveLength(0);
   });
 
@@ -242,14 +242,79 @@ describe('push', () => {
   });
 });
 
+describe('push dates', () => {
+  const posts = (calls: Call[]) => calls.filter((c) => c.method === 'POST').map((c) => [c.url, c.body]);
+
+  test('planned day → due_date', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { dueDay: '2026-12-03' }, cfg(), http);
+    expect(posts(calls)).toEqual([[`${API}/tasks/9`, { due_date: '2026-12-03' }]]);
+  });
+
+  test('planned time → due_datetime in UTC, even when dueDay is cleared in the same change', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { dueWithTime: Date.UTC(2026, 11, 3, 13), dueDay: null }, cfg(), http);
+    expect(posts(calls)).toEqual([[`${API}/tasks/9`, { due_datetime: '2026-12-03T13:00:00.000Z' }]]);
+  });
+
+  test('date removed in SP → "no date"', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { dueDay: null }, cfg(), http);
+    expect(posts(calls)).toEqual([[`${API}/tasks/9`, { due_string: 'no date' }]]);
+  });
+
+  test('clearing dueDay while a time is set (mutual exclusion) does not remove the date', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ active: [task({ id: '9', due: due('2026-12-03T13:00:00Z') })] }));
+    await provider.getByIds!(['9'], cfg(), http);
+    const push = fakeHttp(() => null);
+    await provider.updateIssue!('9', { dueDay: null }, cfg(), push.http);
+    expect(push.calls).toHaveLength(0);
+  });
+
+  test('clearing dueWithTime while a day is set does not remove the date', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ active: [task({ id: '9', due: due('2026-12-03') })] }));
+    await provider.getByIds!(['9'], cfg(), http);
+    const push = fakeHttp(() => null);
+    await provider.updateIssue!('9', { dueWithTime: null }, cfg(), push.http);
+    expect(push.calls).toHaveLength(0);
+  });
+
+  test('recurring occurrences never get dates pushed (Todoist would drop the recurrence)', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('5@2026-11-30', { dueDay: '2026-12-03' }, cfg(), http);
+    expect(calls).toHaveLength(0);
+  });
+
+  test('done and date in one change → both pushed', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { checked: true, dueDay: '2026-12-03' }, cfg(), http);
+    expect(posts(calls).map(([u]) => u)).toEqual(expect.arrayContaining([`${API}/tasks/9`, `${API}/tasks/9/close`]));
+  });
+
+  test('after a date push, a refresh within the interval returns the pushed date', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ active: [task({ id: '9', due: due('2026-11-30') })] }));
+    await provider.getByIds!(['9'], cfg(), http);
+    await provider.updateIssue!('9', { dueDay: '2026-12-03' }, cfg(), fakeHttp(() => null).http);
+    expect((await provider.getByIds!(['9'], cfg(), http))[0]).toMatchObject({ dueDay: '2026-12-03', dueWithTime: undefined });
+  });
+});
+
 describe('definition', () => {
-  test('field mappings: done both ways, rest pull-only, no notes', async () => {
+  test('field mappings: done and dates both ways, title and estimate pull-only, no notes', async () => {
     const { provider } = await setup();
     const m = Object.fromEntries(provider.fieldMappings!.map((f) => [f.taskField, f]));
     expect(m.isDone).toMatchObject({ issueField: 'checked', defaultDirection: 'both' });
     expect(m.title).toMatchObject({ issueField: 'content', defaultDirection: 'pullOnly' });
-    expect(m.dueDay).toMatchObject({ defaultDirection: 'pullOnly', mutuallyExclusive: ['dueWithTime'] });
-    expect(m.dueWithTime).toMatchObject({ defaultDirection: 'pullOnly', mutuallyExclusive: ['dueDay'] });
+    expect(m.dueDay).toMatchObject({ defaultDirection: 'both', mutuallyExclusive: ['dueWithTime'] });
+    expect(m.dueWithTime).toMatchObject({ defaultDirection: 'both', mutuallyExclusive: ['dueDay'] });
     expect(m.timeEstimate).toMatchObject({ issueField: 'durationMs', defaultDirection: 'pullOnly' });
     expect(m.notes).toBeUndefined();
     expect(m.isDone.toIssueValue(true, { issueId: '1' })).toBe(true);
