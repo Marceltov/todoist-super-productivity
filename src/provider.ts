@@ -137,8 +137,10 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       {
         key: 'filterQuery',
         type: 'input',
-        label: 'Todoist filter',
-        description: `Which tasks to import, in Todoist filter syntax. Default: ${DEFAULT_FILTER}`,
+        label: 'Todoist filter (optional)',
+        description:
+          'Leave empty to import tasks assigned to you plus unassigned tasks in your own projects ' +
+          `(${DEFAULT_FILTER}). Narrow it further with Projects below.`,
       },
       {
         key: 'filterHelp',

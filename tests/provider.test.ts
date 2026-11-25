@@ -45,6 +45,16 @@ describe('config', () => {
     expect(provider.configFields.find((f) => f.key === 'projectIds')!.type).toBe('multiSelect');
   });
 
+  test('filter hint says to leave it empty and explains the default in words', async () => {
+    const { provider } = await setup();
+    const f = provider.configFields.find((x) => x.key === 'filterQuery')!;
+    expect(f.label).toBe('Todoist filter (optional)');
+    expect(f.description).toBe(
+      'Leave empty to import tasks assigned to you plus unassigned tasks in your own projects ' +
+      '(assigned to: me | (!assigned & !shared)). Narrow it further with Projects below.',
+    );
+  });
+
   test('loadOptions returns projects as label/value', async () => {
     const { provider } = await setup();
     const { http } = fakeHttp(todoist({ projects: [{ id: 'p1', name: 'Home' }] }));
