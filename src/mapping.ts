@@ -46,7 +46,10 @@ export const toIssue = (task: TodoistTask, issueId: string, checked: boolean, pr
   durationMs: durationMs(task.duration),
   dueText: task.due?.string ?? '',
   isRecurring: task.due?.is_recurring ? 'yes' : '',
-  labels: tagsFor(task, projectName),
+  // Canonical synced value: the Todoist labels, sorted (SP sorts tag titles before comparing and pushing).
+  labels: [...(task.labels ?? [])].sort(),
+  // The project tag is display-only: added to SP's tags on import/pull, never part of the synced labels.
+  projectTag: projectName ?? '',
 });
 
 /**

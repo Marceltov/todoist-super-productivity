@@ -65,7 +65,8 @@ test('dueFields: API v1 timed due in date field (no datetime) is a time', () => 
   expect(dueFields(due('2026-11-30T09:00:00'))).toEqual({ dueWithTime: new Date(2026, 10, 30, 9).getTime() });
 });
 
-test('toIssue: labels plus the project name as a tag', () => {
-  expect(toIssue(task({ labels: ['errands'] }), '1', false, 'Household').labels).toEqual(['errands', 'Household']);
-  expect(toIssue(task({ labels: ['errands'] }), '1', false).labels).toEqual(['errands']);
+test('toIssue: sorted labels; project name kept separately as projectTag', () => {
+  expect(toIssue(task({ labels: ['zeta', 'errands'] }), '1', false, 'Household'))
+    .toMatchObject({ labels: ['errands', 'zeta'], projectTag: 'Household' });
+  expect(toIssue(task({ labels: ['errands'] }), '1', false).projectTag).toBe('');
 });

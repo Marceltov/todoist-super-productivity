@@ -446,13 +446,16 @@ describe('tags', () => {
   test('refresh: Todoist labels plus the project name as tag', async () => {
     const { provider } = await setup();
     const { http } = fakeHttp(todoist({ active: [task({ id: '1', labels: ['errands'] })], projects }));
-    expect((await provider.getByIds!(['1'], cfg(), http))[0].labels).toEqual(['errands', 'Household']);
+    const [issue] = await provider.getByIds!(['1'], cfg(), http);
+    expect(issue.labels).toEqual(['errands']);
+    expect(issue.projectTag).toBe('Household');
   });
 
   test('search results carry labels and the project tag for the tags on import', async () => {
     const { provider } = await setup();
     const { http } = fakeHttp(todoist({ filter: [task({ id: '1', project_id: 'p2', labels: ['phone'] })], projects }));
-    expect((await provider.searchIssues('', cfg(), http))[0].labels).toEqual(['phone', 'Shared']);
+    const [r] = await provider.searchIssues('', cfg(), http);
+    expect(r).toMatchObject({ labels: ['phone'], projectTag: 'Shared' });
   });
 
   test('project names are fetched once per interval', async () => {
@@ -503,6 +506,65 @@ describe('todoist-themed tags', () => {
     await provider.getByIds!(['1'], cfg(), http);
     await provider.getByIds!(['2'], cfg(), http);
     expect(calls.filter((c) => c.url.endsWith('/labels'))).toHaveLength(1);
+  });
+});
+
+describe('review fixes', () => {
+  const projects = [{ id: 'p1', name: 'Household' }];
+
+  test('#1 synced labels are canonical: sorted, without the project tag, equal to the push value', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ active: [task({ id: '1', labels: ['zeta', 'errands'] })], projects }));
+    const [issue] = await provider.getByIds!(['1'], cfg(), http);
+    const m = provider.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
+    expect(provider.extractSyncValues!(issue).labels).toEqual(['errands', 'zeta']);
+    expect(m.toIssueValue(['Household', 'errands', 'zeta'], { issueId: '1' })).toEqual(provider.extractSyncValues!(issue).labels);
+  });
+
+  test('#1 pulled labels get the project tag added back for display', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ active: [task({ id: '1', labels: ['errands'] })], projects }));
+    await provider.getByIds!(['1'], cfg(), http);
+    const m = provider.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
+    expect(m.toTaskValue(['errands'], { issueId: '1' })).toEqual(['errands', 'Household']);
+  });
+
+  test('#1 import: search result sync values give labels plus project tag', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ filter: [task({ id: '1', labels: ['errands'] })], projects }));
+    const [r] = await provider.searchIssues('', cfg(), http);
+    const m = provider.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
+    expect(m.toTaskValue(provider.extractSyncValues!(r as never).labels, { issueId: '1' })).toEqual(['errands', 'Household']);
+  });
+
+  test('#2 getById (used by SP before a push) always reads Todoist, not the cache', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(todoist({ active: [task({ id: '1' })], projects }));
+    await provider.getByIds!(['1'], cfg(), http);
+    await provider.getById('1', cfg(), http);
+    expect(calls.filter((c) => c.url === `${API}/tasks`)).toHaveLength(2);
+  });
+
+  test('#5 a renamed project\'s old tag is never pushed as a label', async () => {
+    const { provider } = await setup();
+    await provider.getByIds!(['1'], cfg(), fakeHttp(todoist({ active: [task({ id: '1' })], projects })).http);
+    // project renamed in Todoist
+    await provider.getByIds!(['2'], cfg(), fakeHttp(todoist({
+      active: [task({ id: '2', project_id: 'p9' })], projects: [{ id: 'p1', name: 'Home' }, { id: 'p9', name: 'X' }] })).http);
+    const m = provider.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
+    expect(m.toIssueValue(['Household', 'errands'], { issueId: '1' })).toEqual(['errands']);
+  });
+
+  test('#5 known project names survive a restart (persisted)', async () => {
+    const store = memoryStorage();
+    const book = await OccurrenceBook.load(memoryStorage());
+    const a = createProvider({ getToken: async () => 'tok', book, cache: new RefreshCache(), projectNameStorage: store });
+    await a.getByIds!(['1'], cfg(), fakeHttp(todoist({ active: [task({ id: '1' })], projects })).http);
+    await new Promise((r) => setTimeout(r, 0));
+    const b = createProvider({ getToken: async () => 'tok', book, cache: new RefreshCache(), projectNameStorage: store });
+    await b.getByIds!(['3'], cfg(), fakeHttp(todoist({ active: [task({ id: '3', project_id: 'p2' })], projects: [{ id: 'p2', name: 'Other' }] })).http);
+    const m = b.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
+    expect(m.toIssueValue(['Household', 'errands'], { issueId: '1' })).toEqual(['errands']);
   });
 });
 

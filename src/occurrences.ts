@@ -44,7 +44,10 @@ export class OccurrenceBook {
   peekId(task: TodoistTask): string | null {
     const id = issueIdFor(task);
     const open = this.state.open[task.id];
-    return !open || open.id === id || this.isCompleted(open.id) ? id : null;
+    // The open occurrence is finished when known completed, or when Todoist counted a completion since it opened
+    // (e.g. its SP task was deleted and nobody polled it any more).
+    const finished = !!open && (this.isCompleted(open.id) || task.checked || (task.completed_count ?? 0) > open.count);
+    return !open || open.id === id || finished ? id : null;
   }
 
   /** Like peekId, and records the returned id as the task's open occurrence (backlog import). */

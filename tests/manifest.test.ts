@@ -10,5 +10,6 @@ test('manifest matches global constraints', () => {
   expect(manifest.issueProvider).not.toHaveProperty('issueProviderKey');
   expect(manifest.issueProvider.defaultAutoAddToBacklog).toBe(false); // pick tasks by hand, like GitHub
   expect(manifest.dataSharing[0].hosts).toEqual(['api.todoist.com']);
-  expect(manifest.dataSharing[0].data).toEqual(['credentials', 'userText', 'ids', 'taskStatus']);
+  expect(manifest.dataSharing[0].data).toEqual(
+    ['credentials', 'userText', 'ids', 'taskStatus', 'taskTitles', 'taskSchedule', 'projectAndTagNames']);
 });

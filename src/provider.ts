@@ -7,7 +7,7 @@ import type {
 } from '@super-productivity/plugin-api';
 import { parseInterval, RefreshCache } from './interval';
 import { parseIssueId, tagsFor, taskUrl, toIssue, toSearchResult } from './mapping';
-import { OccurrenceBook } from './occurrences';
+import { OccurrenceBook, type Storage } from './occurrences';
 import { todoistHex } from './colors';
 import type { TagStyle } from './tag-style';
 import { closeTask, filterTasks, getActiveTasks, getLabels, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
@@ -17,6 +17,8 @@ export interface ProviderDeps {
   getToken(): Promise<string | null>;
   book: OccurrenceBook;
   cache: RefreshCache;
+  /** Persists every Todoist project name seen, so tags of renamed projects are still never pushed as labels. */
+  projectNameStorage?: Storage;
   /** Called with the Todoist look (colour, icon) of the tags of tasks just fetched. */
   onTagStyles?(styles: TagStyle[]): void;
 }
@@ -54,6 +56,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
 
   /** Project names/colours and label colours, fetched at most once per check interval (or for an unknown project). */
   const metaFor = async (http: PluginHttp, intervalMs: number, projectIds: string[]) => {
+    await namesLoaded;
     const stale = !meta || Date.now() - meta.at >= intervalMs;
     if (stale || projectIds.some((id) => !meta!.projects.has(id))) {
       const [projects, labels] = await Promise.all([getProjects(http), getLabels(http)]);
@@ -62,13 +65,38 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
         projects: new Map(projects.map((p) => [p.id, { name: p.name, color: p.color }] as const)),
         labelColors: new Map(labels.map((l) => [l.name, l.color] as const)),
       };
+      rememberProjectNames(projects.map((p) => p.name));
     }
     return meta!;
   };
 
   /** Tags that stand for a Todoist project (known project names): display-only, never pushed as labels. */
-  const isProjectTag = (tag: string): boolean => [...(meta?.projects.values() ?? [])].some((p) => p.name === tag);
+  // Every project name ever seen (persisted), so a tag of a renamed project is still recognised as a project tag.
+  const knownProjectNames = new Set<string>();
+  const namesLoaded = (async () => {
+    try {
+      const raw = await deps.projectNameStorage?.load();
+      const names = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(names)) names.forEach((n) => typeof n === 'string' && knownProjectNames.add(n));
+    } catch {
+      // unreadable: start empty
+    }
+  })();
+  const rememberProjectNames = (names: string[]) => {
+    const before = knownProjectNames.size;
+    names.forEach((n) => knownProjectNames.add(n));
+    if (knownProjectNames.size !== before) {
+      void deps.projectNameStorage?.save(JSON.stringify([...knownProjectNames])).catch(() => undefined);
+    }
+  };
+  const isProjectTag = (tag: string): boolean => knownProjectNames.has(tag);
   const withoutProjectTags = (tags: string[]): string[] => tags.filter((t) => !isProjectTag(t));
+  /** issue id → its current project tag, so pulls and imports can add it back to SP's tags. */
+  const projectTagById = new Map<string, string>();
+  const rememberProjectTag = <T extends { id: string; projectTag?: unknown }>(issue: T): T => {
+    if (typeof issue.projectTag === 'string' && issue.projectTag) projectTagById.set(issue.id, issue.projectTag);
+    return issue;
+  };
 
   /** Project name per task (for the project tag), and the Todoist look of the tasks' tags, reported once. */
   const projectNamesFor = async (http: PluginHttp, intervalMs: number, tasks: TodoistTask[]) => {
@@ -156,9 +184,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     if (Array.isArray(changes.labels)) {
       const labels = withoutProjectTags(changes.labels as string[]);
       body.labels = labels;
-      const lastTags = (cache.get(id, Infinity)?.labels as string[] | undefined) ?? [];
-      const projectTags = lastTags.filter(isProjectTag);
-      patch.labels = [...labels, ...projectTags];
+      patch.labels = [...labels].sort();
     }
     if ('durationMs' in changes) {
       const ms = Number(changes.durationMs) || 0;
@@ -203,7 +229,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       if (!t) issue = deletedIssue(id);
       else if (occurrence) issue = toIssue(t, id, book.resolve(id, t) === 'done', names.get(t.project_id));
       else issue = toIssue(t, id, t.checked, names.get(t.project_id));
-      cache.set(issue);
+      cache.set(rememberProjectTag(issue));
       return issue;
     });
   };
@@ -269,7 +295,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       const names = await projectNamesFor(http, intervalMs, tasks);
       return tasks.flatMap((t): PluginSearchResult[] => {
         const id = t.due?.is_recurring ? book.peekId(t) : t.id;
-        return id ? [toSearchResult(t, id, names.get(t.project_id))] : [];
+        return id ? [rememberProjectTag(toSearchResult(t, id, names.get(t.project_id)))] : [];
       });
     },
 
@@ -282,7 +308,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       const names = await projectNamesFor(http, intervalMs, tasks);
       const results = tasks.flatMap((t): PluginSearchResult[] => {
         const id = t.due?.is_recurring ? book.idToImport(t) : t.id;
-        return id ? [toSearchResult(t, id, names.get(t.project_id))] : [];
+        return id ? [rememberProjectTag(toSearchResult(t, id, names.get(t.project_id)))] : [];
       });
       backlogKey = key;
       cache.setBacklog(results);
@@ -290,7 +316,9 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     },
 
     async getById(id, config, http) {
-      const [issue] = await getByIds([id], config, http);
+      // SP reads this right before a push to detect remote changes, so it always goes to Todoist (no cache):
+      // otherwise a change someone made in Todoist within the interval could be overwritten.
+      const [issue] = await fetchIssues([id], http, settings(config).intervalMs);
       if (!issue) throw new Error(`Todoist task ${id} not found`);
       return issue;
     },
@@ -324,11 +352,18 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       mapping('tagIds', 'labels', {
         defaultDirection: 'both',
         toIssueValue: (v) => withoutProjectTags(Array.isArray(v) ? (v as string[]) : []),
-        toTaskValue: (v) => (Array.isArray(v) ? v : []),
+        toTaskValue: (v, ctx) => {
+          const labels = Array.isArray(v) ? (v as string[]) : [];
+          const projectTag = projectTagById.get(ctx.issueId);
+          return projectTag && !labels.includes(projectTag) ? [...labels, projectTag] : labels;
+        },
       }),
     ],
 
-    extractSyncValues: (issue) => Object.fromEntries(SYNC_FIELDS.map((f) => [f, issue[f]])),
+    extractSyncValues: (issue) => ({
+      ...Object.fromEntries(SYNC_FIELDS.map((f) => [f, issue[f]])),
+      labels: Array.isArray(issue.labels) ? withoutProjectTags(issue.labels as string[]).sort() : [],
+    }),
 
     deletedStates: ['deleted'],
 

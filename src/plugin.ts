@@ -65,6 +65,10 @@ const main = async (): Promise<void> => {
       getToken: () => PluginAPI.getSecret(TOKEN_KEY),
       book,
       cache: new RefreshCache(),
+      projectNameStorage: {
+        load: () => PluginAPI.loadSyncedData('projectNames'),
+        save: (data) => PluginAPI.persistDataSynced(data, 'projectNames'),
+      },
       onTagStyles: applyTagStyles,
     }),
   );

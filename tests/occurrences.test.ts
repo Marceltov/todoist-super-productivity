@@ -82,3 +82,12 @@ test('corrupt stored data starts fresh', async () => {
   const book = await OccurrenceBook.load(store);
   expect(book.idToImport(rec('5', '2026-11-30'))).toBe('5@2026-11-30');
 });
+
+test('an abandoned open occurrence completed in Todoist does not block the series (review #3)', async () => {
+  const book = await OccurrenceBook.load(memory());
+  book.idToImport(rec('5', '2026-11-30', { completed_count: 2 }));
+  // SP task deleted, occurrence completed in Todoist: count went up, nobody called resolve()
+  expect(book.peekId(rec('5', '2026-12-07', { completed_count: 3 }))).toBe('5@2026-12-07');
+  expect(book.idToImport(rec('5', '2026-12-07', { completed_count: 3 }))).toBe('5@2026-12-07');
+  expect(book.idToImport(rec('5', '2026-12-14', { completed_count: 3 }))).toBeNull();
+});
