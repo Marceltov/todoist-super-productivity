@@ -32,7 +32,7 @@ const settings = (config: Record<string, unknown>) => {
 const inProjects = (projectIds: string[]) => (t: TodoistTask) =>
   projectIds.length === 0 || projectIds.includes(t.project_id);
 
-const pullOnly = (taskField: PluginFieldMapping['taskField'], issueField: string, extra: Partial<PluginFieldMapping> = {}): PluginFieldMapping => ({
+const mapping = (taskField: PluginFieldMapping['taskField'], issueField: string, extra: Partial<PluginFieldMapping> = {}): PluginFieldMapping => ({
   taskField,
   issueField,
   defaultDirection: 'pullOnly',
@@ -79,29 +79,48 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     rememberPush(id, checked);
   };
 
-  /** SP planned (or unplanned) the task: mirror it in Todoist. A time wins over a day; clearing one half of the
-   *  mutually exclusive pair while the other is still set is not a removal. */
-  const pushDue = async (id: string, taskId: string, changes: Record<string, unknown>, http: PluginHttp) => {
+  /** SP planned (or unplanned) the task. A time wins over a day; clearing one half of the mutually exclusive pair
+   *  while the other is still set is not a removal. Returns null when there is nothing to send. */
+  const dueUpdate = (id: string, changes: Record<string, unknown>) => {
     const last = cache.get(id, Infinity);
     const time = changes.dueWithTime;
     const day = changes.dueDay;
-    let body: Record<string, unknown>;
-    let next: { dueDay?: string; dueWithTime?: number } = {};
     if (typeof time === 'number' && time > 0) {
-      body = { due_datetime: new Date(time).toISOString() };
-      next = { dueWithTime: time };
-    } else if (typeof day === 'string' && day) {
-      body = { due_date: day };
-      next = { dueDay: day };
-    } else {
-      const otherStillSet = 'dueDay' in changes
-        ? !('dueWithTime' in changes) && !!last?.dueWithTime
-        : !!last?.dueDay;
-      if (otherStillSet) return;
-      body = { due_string: 'no date' };
+      return { body: { due_datetime: new Date(time).toISOString() }, patch: { dueDay: undefined, dueWithTime: time } };
     }
+    if (typeof day === 'string' && day) {
+      return { body: { due_date: day }, patch: { dueDay: day, dueWithTime: undefined } };
+    }
+    const otherStillSet = 'dueDay' in changes ? !('dueWithTime' in changes) && !!last?.dueWithTime : !!last?.dueDay;
+    if (otherStillSet) return null;
+    return { body: { due_string: 'no date' }, patch: { dueDay: undefined, dueWithTime: undefined } };
+  };
+
+  /** Title, estimate and (non-recurring) dates go to Todoist in one update request. */
+  const pushFields = async (id: string, taskId: string, occurrence: string | undefined, changes: Record<string, unknown>, http: PluginHttp) => {
+    const body: Record<string, unknown> = {};
+    const patch: Partial<PluginIssue> = {};
+    if (typeof changes.content === 'string' && changes.content.trim()) {
+      body.content = changes.content;
+      Object.assign(patch, { content: changes.content, title: changes.content });
+    }
+    if ('durationMs' in changes) {
+      const ms = Number(changes.durationMs) || 0;
+      Object.assign(body, ms > 0 ? { duration: Math.max(1, Math.round(ms / 60_000)), duration_unit: 'minute' } : { duration: null });
+      patch.durationMs = ms > 0 ? ms : 0;
+    }
+    // Dates: never for recurring tasks, because setting a date through the API drops the recurrence.
+    if (!occurrence && ('dueDay' in changes || 'dueWithTime' in changes)) {
+      const due = dueUpdate(id, changes);
+      if (due) {
+        Object.assign(body, due.body);
+        Object.assign(patch, due.patch);
+      }
+    }
+    if (Object.keys(body).length === 0) return;
     await updateTask(http, taskId, body);
-    if (last) cache.set({ ...last, dueDay: next.dueDay, dueWithTime: next.dueWithTime });
+    const last = cache.get(id, Infinity);
+    if (last) cache.set({ ...last, ...patch });
   };
 
   const fetchIssues = async (ids: string[], http: PluginHttp): Promise<PluginIssue[]> => {
@@ -228,12 +247,12 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
         toIssueValue: (v) => Boolean(v),
         toTaskValue: (v) => Boolean(v),
       },
-      pullOnly('title', 'content'),
-      // Dates sync both ways by default (Marcel: planning in SP should show in the shared Todoist list).
+      mapping('title', 'content', { defaultDirection: 'both' }),
+      // Everything syncs both ways by default (Marcel: planning in SP should show in the shared Todoist list).
       // Users can change the direction per field in the integration's Two-Way Sync section.
-      pullOnly('dueDay', 'dueDay', { defaultDirection: 'both', mutuallyExclusive: ['dueWithTime'] }),
-      pullOnly('dueWithTime', 'dueWithTime', { defaultDirection: 'both', mutuallyExclusive: ['dueDay'] }),
-      pullOnly('timeEstimate', 'durationMs'),
+      mapping('dueDay', 'dueDay', { defaultDirection: 'both', mutuallyExclusive: ['dueWithTime'] }),
+      mapping('dueWithTime', 'dueWithTime', { defaultDirection: 'both', mutuallyExclusive: ['dueDay'] }),
+      mapping('timeEstimate', 'durationMs', { defaultDirection: 'both' }),
     ],
 
     extractSyncValues: (issue) => Object.fromEntries(SYNC_FIELDS.map((f) => [f, issue[f]])),
@@ -242,8 +261,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
 
     async updateIssue(id, changes, _config, http) {
       const { taskId, occurrence } = parseIssueId(id);
-      // Dates: never for recurring tasks, because setting a date through the API drops the recurrence.
-      if (!occurrence && ('dueDay' in changes || 'dueWithTime' in changes)) await pushDue(id, taskId, changes, http);
+      await pushFields(id, taskId, occurrence, changes, http);
       if ('checked' in changes) await pushDone(id, taskId, occurrence, Boolean(changes.checked), http);
     },
   };

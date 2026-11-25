@@ -215,10 +215,10 @@ describe('push', () => {
     expect(calls.map((c) => c.url)).toEqual([`${API}/tasks/9/close`, `${API}/tasks/9/reopen`]);
   });
 
-  test('updateIssue ignores fields it does not push (title, estimate)', async () => {
+  test('updateIssue ignores fields it does not know', async () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(() => null);
-    await provider.updateIssue!('9', { content: 'x', durationMs: 60_000 }, cfg(), http);
+    await provider.updateIssue!('9', { foo: 'x' }, cfg(), http);
     expect(calls).toHaveLength(0);
   });
 
@@ -317,15 +317,65 @@ describe('push dates', () => {
   });
 });
 
+describe('push title and estimate', () => {
+  const posts = (calls: Call[]) => calls.filter((c) => c.method === 'POST').map((c) => [c.url, c.body]);
+
+  test('renamed in SP → content, also for recurring tasks', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { content: 'Buy oat milk' }, cfg(), http);
+    await provider.updateIssue!('5@2026-11-30', { content: 'Bins out' }, cfg(), http);
+    expect(posts(calls)).toEqual([
+      [`${API}/tasks/9`, { content: 'Buy oat milk' }],
+      [`${API}/tasks/5`, { content: 'Bins out' }],
+    ]);
+  });
+
+  test('an empty title is never pushed', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { content: '  ' }, cfg(), http);
+    expect(calls).toHaveLength(0);
+  });
+
+  test('estimate → duration in minutes; removed estimate → no duration', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { durationMs: 2_700_000 }, cfg(), http);
+    await provider.updateIssue!('9', { durationMs: 0 }, cfg(), http);
+    expect(posts(calls)).toEqual([
+      [`${API}/tasks/9`, { duration: 45, duration_unit: 'minute' }],
+      [`${API}/tasks/9`, { duration: null }],
+    ]);
+  });
+
+  test('title, estimate and date in one change → one update request', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.updateIssue!('9', { content: 'X', durationMs: 600_000, dueDay: '2026-12-03' }, cfg(), http);
+    expect(posts(calls)).toEqual([
+      [`${API}/tasks/9`, { content: 'X', duration: 10, duration_unit: 'minute', due_date: '2026-12-03' }],
+    ]);
+  });
+
+  test('after pushing title and estimate, a refresh returns them', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ active: [task({ id: '9', content: 'Old' })] }));
+    await provider.getByIds!(['9'], cfg(), http);
+    await provider.updateIssue!('9', { content: 'New', durationMs: 600_000 }, cfg(), fakeHttp(() => null).http);
+    expect((await provider.getByIds!(['9'], cfg(), http))[0]).toMatchObject({ title: 'New', content: 'New', durationMs: 600_000 });
+  });
+});
+
 describe('definition', () => {
-  test('field mappings: done and dates both ways, title and estimate pull-only, no notes', async () => {
+  test('field mappings: everything both ways by default, no notes', async () => {
     const { provider } = await setup();
     const m = Object.fromEntries(provider.fieldMappings!.map((f) => [f.taskField, f]));
     expect(m.isDone).toMatchObject({ issueField: 'checked', defaultDirection: 'both' });
-    expect(m.title).toMatchObject({ issueField: 'content', defaultDirection: 'pullOnly' });
+    expect(m.title).toMatchObject({ issueField: 'content', defaultDirection: 'both' });
     expect(m.dueDay).toMatchObject({ defaultDirection: 'both', mutuallyExclusive: ['dueWithTime'] });
     expect(m.dueWithTime).toMatchObject({ defaultDirection: 'both', mutuallyExclusive: ['dueDay'] });
-    expect(m.timeEstimate).toMatchObject({ issueField: 'durationMs', defaultDirection: 'pullOnly' });
+    expect(m.timeEstimate).toMatchObject({ issueField: 'durationMs', defaultDirection: 'both' });
     expect(m.notes).toBeUndefined();
     expect(m.isDone.toIssueValue(true, { issueId: '1' })).toBe(true);
     expect(m.isDone.toTaskValue(false, { issueId: '1' })).toBe(false);
