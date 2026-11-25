@@ -6,15 +6,19 @@ import type {
   PluginSearchResult,
 } from '@super-productivity/plugin-api';
 import { parseInterval, RefreshCache } from './interval';
-import { PROJECT_TAG_PREFIX, parseIssueId, taskUrl, toIssue, toSearchResult, withoutProjectTags } from './mapping';
+import { PROJECT_TAG_PREFIX, parseIssueId, tagsFor, taskUrl, toIssue, toSearchResult, withoutProjectTags } from './mapping';
 import { OccurrenceBook } from './occurrences';
-import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
+import { todoistHex } from './colors';
+import type { TagStyle } from './tag-style';
+import { closeTask, filterTasks, getActiveTasks, getLabels, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
 import type { TodoistSyncConfig, TodoistTask } from './types';
 
 export interface ProviderDeps {
   getToken(): Promise<string | null>;
   book: OccurrenceBook;
   cache: RefreshCache;
+  /** Called with the Todoist look (colour, icon) of the tags of tasks just fetched. */
+  onTagStyles?(styles: TagStyle[]): void;
 }
 
 // Tasks assigned to me, plus unassigned tasks in my own (non-shared) projects. Verified live 2026-11-25.
@@ -46,15 +50,41 @@ const SYNC_FIELDS = ['checked', 'content', 'dueDay', 'dueWithTime', 'durationMs'
 export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinition {
   const { book, cache } = deps;
   let backlogKey = '';
-  let projectNames: { at: number; byId: Map<string, string> } | undefined;
+  let meta: { at: number; projects: Map<string, { name: string; color?: string }>; labelColors: Map<string, string | undefined> } | undefined;
 
-  /** Project id → name, for the "#Project" tag. Fetched at most once per check interval (or for an unknown id). */
-  const namesFor = async (http: PluginHttp, intervalMs: number, ids: string[]): Promise<Map<string, string>> => {
-    const stale = !projectNames || Date.now() - projectNames.at >= intervalMs;
-    if (stale || ids.some((id) => !projectNames!.byId.has(id))) {
-      projectNames = { at: Date.now(), byId: new Map((await getProjects(http)).map((p) => [p.id, p.name] as const)) };
+  /** Project names/colours and label colours, fetched at most once per check interval (or for an unknown project). */
+  const metaFor = async (http: PluginHttp, intervalMs: number, projectIds: string[]) => {
+    const stale = !meta || Date.now() - meta.at >= intervalMs;
+    if (stale || projectIds.some((id) => !meta!.projects.has(id))) {
+      const [projects, labels] = await Promise.all([getProjects(http), getLabels(http)]);
+      meta = {
+        at: Date.now(),
+        projects: new Map(projects.map((p) => [p.id, { name: p.name, color: p.color }] as const)),
+        labelColors: new Map(labels.map((l) => [l.name, l.color] as const)),
+      };
     }
-    return projectNames!.byId;
+    return meta!;
+  };
+
+  /** Project name per task (for the "#Project" tag), and the Todoist look of the tasks' tags, reported once. */
+  const projectNamesFor = async (http: PluginHttp, intervalMs: number, tasks: TodoistTask[]) => {
+    if (!tasks.length) return new Map<string, string>();
+    const m = await metaFor(http, intervalMs, tasks.map((t) => t.project_id));
+    const names = new Map([...m.projects].map(([id, p]) => [id, p.name] as const));
+    if (deps.onTagStyles) {
+      const styles = new Map<string, TagStyle>();
+      for (const t of tasks) {
+        const project = m.projects.get(t.project_id);
+        for (const title of tagsFor(t, project?.name)) {
+          if (styles.has(title)) continue;
+          styles.set(title, title.startsWith(PROJECT_TAG_PREFIX)
+            ? { title, color: todoistHex(project?.color), icon: 'tag' }
+            : { title, color: todoistHex(m.labelColors.get(title)), icon: 'label' });
+        }
+      }
+      if (styles.size) deps.onTagStyles([...styles.values()]);
+    }
+    return names;
   };
 
   /** A task Todoist deleted. Keeps the last known fields so the title mapping never blanks the SP title. */
@@ -161,7 +191,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     const looked = await Promise.all(missing.map(async (id) => [id, await getTask(http, id)] as const));
     const closedOrGone = new Map(looked);
     const found = [...live.values(), ...looked.flatMap(([, t]) => (t ? [t] : []))];
-    const names = found.length ? await namesFor(http, intervalMs, found.map((t) => t.project_id)) : new Map<string, string>();
+    const names = await projectNamesFor(http, intervalMs, found);
 
     return parsed.map(({ id, taskId, occurrence }) => {
       const t = live.get(taskId) ?? closedOrGone.get(taskId) ?? undefined;
@@ -232,7 +262,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     async searchIssues(term, config, http) {
       const { filter, projectIds, intervalMs } = settings(config);
       const tasks = (await filterTasks(http, searchQuery(filter, term))).filter(inProjects(projectIds));
-      const names = tasks.length ? await namesFor(http, intervalMs, tasks.map((t) => t.project_id)) : new Map();
+      const names = await projectNamesFor(http, intervalMs, tasks);
       return tasks.flatMap((t): PluginSearchResult[] => {
         const id = t.due?.is_recurring ? book.peekId(t) : t.id;
         return id ? [toSearchResult(t, id, names.get(t.project_id))] : [];
@@ -245,7 +275,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       const cached = key === backlogKey ? cache.getBacklog(intervalMs) : undefined;
       if (cached) return cached;
       const tasks = (await filterTasks(http, filter)).filter(inProjects(projectIds));
-      const names = tasks.length ? await namesFor(http, intervalMs, tasks.map((t) => t.project_id)) : new Map();
+      const names = await projectNamesFor(http, intervalMs, tasks);
       const results = tasks.flatMap((t): PluginSearchResult[] => {
         const id = t.due?.is_recurring ? book.idToImport(t) : t.id;
         return id ? [toSearchResult(t, id, names.get(t.project_id))] : [];
@@ -299,8 +329,6 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     deletedStates: ['deleted'],
 
     async updateIssue(id, changes, _config, http) {
-      // Field names only (no values): shows in the developer console whether SP asked for a push at all.
-      console.info('[todoist-sync] push', id, Object.keys(changes).join(', '));
       const { taskId, occurrence } = parseIssueId(id);
       await pushFields(id, taskId, occurrence, changes, http);
       if ('checked' in changes) await pushDone(id, taskId, occurrence, Boolean(changes.checked), http);

@@ -1,7 +1,7 @@
 {
   "id": "todoist-sync",
   "name": "Todoist",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
   "description": "Live Todoist sync: import tasks by filter and project, tick them off in Super Productivity to complete them in Todoist.",

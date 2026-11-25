@@ -3,6 +3,7 @@ import type { PluginAPI as PluginAPIType } from '@super-productivity/plugin-api'
 import { RefreshCache } from './interval';
 import { OccurrenceBook } from './occurrences';
 import { createProvider } from './provider';
+import { type TagStyle, tagUpdates } from './tag-style';
 
 declare const PluginAPI: PluginAPIType;
 
@@ -42,13 +43,30 @@ const openTokenDialog = async (): Promise<void> => {
   }
 };
 
+/** Gives tags of Todoist projects/labels their Todoist colour and icon. Runs one at a time; failures are harmless. */
+let styling = Promise.resolve();
+const applyTagStyles = (styles: TagStyle[]): void => {
+  styling = styling
+    .then(async () => {
+      for (const { id, updates } of tagUpdates(await PluginAPI.getAllTags(), styles)) {
+        await PluginAPI.updateTag(id, updates);
+      }
+    })
+    .catch((e) => console.warn('[todoist-sync] tag styling failed', e));
+};
+
 const main = async (): Promise<void> => {
   const book = await OccurrenceBook.load({
     load: () => PluginAPI.loadSyncedData('occurrences'),
     save: (data) => PluginAPI.persistDataSynced(data, 'occurrences'),
   });
   PluginAPI.registerIssueProvider(
-    createProvider({ getToken: () => PluginAPI.getSecret(TOKEN_KEY), book, cache: new RefreshCache() }),
+    createProvider({
+      getToken: () => PluginAPI.getSecret(TOKEN_KEY),
+      book,
+      cache: new RefreshCache(),
+      onTagStyles: applyTagStyles,
+    }),
   );
   PluginAPI.registerConfigHandler(() => void openTokenDialog());
 };

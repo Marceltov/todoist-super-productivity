@@ -11,15 +11,19 @@ const memoryStorage = () => { let d: string | null = null; return { load: async 
 const setup = async (o: { token?: string | null; now?: () => number } = {}) => {
   const book = await OccurrenceBook.load(memoryStorage());
   const cache = new RefreshCache(o.now ?? (() => 0));
-  const provider = createProvider({ getToken: async () => (o.token === undefined ? 'tok' : o.token), book, cache });
-  return { book, cache, provider };
+  const styled: unknown[][] = [];
+  const provider = createProvider({
+    getToken: async () => (o.token === undefined ? 'tok' : o.token), book, cache,
+    onTagStyles: (styles) => styled.push(styles),
+  });
+  return { book, cache, provider, styled };
 };
 const cfg = (o: Record<string, unknown> = {}) => ({ filterQuery: 'assigned to: me', checkInterval: '5m', ...o });
 const page = (results: unknown[]) => ({ results, next_cursor: null });
 
 /** Routes fake Todoist calls: filter results, active tasks by id, completed items. */
 /** Routes fake Todoist calls. `active`: open tasks; `closed`: closed tasks (only GET /tasks/{id} returns them). */
-const todoist = (d: { filter?: TodoistTask[]; active?: TodoistTask[]; closed?: TodoistTask[]; projects?: unknown[] }) =>
+const todoist = (d: { filter?: TodoistTask[]; active?: TodoistTask[]; closed?: TodoistTask[]; projects?: unknown[]; labels?: unknown[] }) =>
   (c: Call) => {
     if (c.url === `${API}/tasks/filter`) return page(d.filter ?? []);
     if (c.url === `${API}/tasks`) {
@@ -33,6 +37,7 @@ const todoist = (d: { filter?: TodoistTask[]; active?: TodoistTask[]; closed?: T
       return t;
     }
     if (c.url === `${API}/projects`) return page(d.projects ?? []);
+    if (c.url === `${API}/labels`) return page(d.labels ?? []);
     return null;
   };
 
@@ -471,6 +476,31 @@ describe('tags', () => {
     const { http, calls } = fakeHttp(() => null);
     await provider.updateIssue!('9', { labels: ['errands', 'phone'] }, cfg(), http);
     expect(calls.map((c) => [c.url, c.body])).toEqual([[`${API}/tasks/9`, { labels: ['errands', 'phone'] }]]);
+  });
+});
+
+describe('todoist-themed tags', () => {
+  test('refresh reports Todoist colours and icons for the tags of returned tasks', async () => {
+    const { provider, styled } = await setup();
+    const { http } = fakeHttp(todoist({
+      active: [task({ id: '1', labels: ['errands', 'shared-only'] })],
+      projects: [{ id: 'p1', name: 'Household', color: 'berry_red' }],
+      labels: [{ id: 'l1', name: 'errands', color: 'blue' }],
+    }));
+    await provider.getByIds!(['1'], cfg(), http);
+    expect(styled.at(-1)).toEqual([
+      { title: 'errands', color: '#4073ff', icon: 'label' },
+      { title: 'shared-only', color: '#808080', icon: 'label' },
+      { title: '#Household', color: '#b8256f', icon: 'tag' },
+    ]);
+  });
+
+  test('labels are fetched once per interval', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(todoist({ active: [task({ id: '1' }), task({ id: '2' })], projects: [{ id: 'p1', name: 'H' }] }));
+    await provider.getByIds!(['1'], cfg(), http);
+    await provider.getByIds!(['2'], cfg(), http);
+    expect(calls.filter((c) => c.url.endsWith('/labels'))).toHaveLength(1);
   });
 });
 

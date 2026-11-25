@@ -74,8 +74,13 @@ export const getTask = async (http: PluginHttp, id: string): Promise<TodoistTask
   }
 };
 
-export const getProjects = (http: PluginHttp): Promise<{ id: string; name: string }[]> =>
-  getAll<{ id: string; name: string }>(http, '/projects', {}).then((ps) => ps.map(({ id, name }) => ({ id, name })));
+export const getProjects = (http: PluginHttp): Promise<{ id: string; name: string; color?: string }[]> =>
+  getAll<{ id: string; name: string; color?: string }>(http, '/projects', {}).then((ps) =>
+    ps.map(({ id, name, color }) => ({ id, name, color })));
+
+/** Personal labels (with colour). Labels that only exist on shared tasks aren't listed. */
+export const getLabels = (http: PluginHttp): Promise<{ name: string; color?: string }[]> =>
+  getAll<{ name: string; color?: string }>(http, '/labels', {}).then((ls) => ls.map(({ name, color }) => ({ name, color })));
 
 export const closeTask = (http: PluginHttp, id: string): Promise<unknown> =>
   withRetry(() => http.post(`${API}/tasks/${id}/close`, {}));
