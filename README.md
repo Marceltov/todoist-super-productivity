@@ -74,7 +74,7 @@ npm run pack        # todoist-sync-<version>.zip
 `scripts/verify-api.mjs` checks the Todoist API behaviour the plugin relies on, against a throwaway project whose name
 starts with `sp-test`. It reads a token from `.dev-token`, which is git-ignored.
 
-Design and plan: `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+Design decisions: [`docs/adr/`](docs/adr/).
 
 ## License
 
