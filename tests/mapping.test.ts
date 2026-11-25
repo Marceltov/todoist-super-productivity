@@ -1,13 +1,5 @@
 import { dueFields, durationMs, issueIdFor, parseIssueId, toIssue, toSearchResult } from '../src/mapping';
-import type { TodoistDue, TodoistTask } from '../src/types';
-
-const due = (date: string, o: Partial<TodoistDue> = {}): TodoistDue => ({
-  date, datetime: null, timezone: null, is_recurring: false, string: date, ...o,
-});
-export const task = (o: Partial<TodoistTask> = {}): TodoistTask => ({
-  id: '1', content: 'Task', description: '', checked: false, completed_at: null,
-  updated_at: '2026-11-25T10:00:00Z', due: null, duration: null, project_id: 'p1', ...o,
-});
+import { due, task } from './factories';
 
 test('issueIdFor: plain id for one-off, id@date for recurring', () => {
   expect(issueIdFor(task({ id: '42', due: due('2026-11-30') }))).toBe('42');
