@@ -38,4 +38,9 @@ export class RefreshCache {
   setBacklog(results: PluginSearchResult[]): void {
     this.backlog = { at: this.now(), results };
   }
+
+  /** Removes a task from the cached import list (it was deleted or completed), keeping the list's age. */
+  dropFromBacklog(issueId: string): void {
+    if (this.backlog) this.backlog = { ...this.backlog, results: this.backlog.results.filter((r) => r.id !== issueId) };
+  }
 }

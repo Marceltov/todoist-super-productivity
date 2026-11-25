@@ -33,3 +33,10 @@ test('backlog cache follows the same age rule', () => {
   now = 300_000;
   expect(cache.getBacklog(300_000)).toBeUndefined();
 });
+
+test('backlog entries can be dropped without refreshing', () => {
+  const cache = new RefreshCache(() => 0);
+  cache.setBacklog([{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }]);
+  cache.dropFromBacklog('a');
+  expect(cache.getBacklog(300_000)).toEqual([{ id: 'b', title: 'B' }]);
+});

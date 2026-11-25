@@ -10,7 +10,7 @@ import { parseIssueId, tagsFor, taskUrl, toIssue, toSearchResult } from './mappi
 import { OccurrenceBook, type Storage } from './occurrences';
 import { todoistHex } from './colors';
 import type { TagStyle } from './tag-style';
-import { closeTask, filterTasks, getActiveTasks, getLabels, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
+import { closeTask, deleteTask, filterTasks, getActiveTasks, getLabels, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
 import type { TodoistSyncConfig, TodoistTask } from './types';
 
 export interface ProviderDeps {
@@ -201,19 +201,26 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     if (last) cache.set({ ...last, checked, state: checked ? 'done' : 'open' });
   };
 
+  /** Closes a recurring occurrence (Todoist moves the series to its next date) if it is still the current one. */
+  const closeOccurrenceIfCurrent = async (id: string, taskId: string, occurrence: string, http: PluginHttp) => {
+    const [live] = await getActiveTasks(http, [taskId]);
+    // Still the same occurrence? Use the completion counter (survives a moved date); fall back to the date.
+    const baseline = book.openCount(id);
+    const same = baseline !== undefined
+      ? (live?.completed_count ?? 0) === baseline
+      : live?.due?.date.slice(0, 10) === occurrence;
+    if (live && !live.checked && same) await closeTask(http, taskId);
+    await book.markCompleted(id);
+    cache.dropFromBacklog(id); // or the cached import list would offer it again within the interval
+  };
+
   const pushDone = async (id: string, taskId: string, occurrence: string | undefined, checked: boolean, http: PluginHttp) => {
     if (occurrence) {
       if (!checked) return; // reopening a recurring task would touch the shared list unpredictably
-      const [live] = await getActiveTasks(http, [taskId]);
-      // Still the same occurrence? Use the completion counter (survives a moved date); fall back to the date.
-      const baseline = book.openCount(id);
-      const same = baseline !== undefined
-        ? (live?.completed_count ?? 0) === baseline
-        : live?.due?.date.slice(0, 10) === occurrence;
-      if (live && !live.checked && same) await closeTask(http, taskId);
-      await book.markCompleted(id);
+      await closeOccurrenceIfCurrent(id, taskId, occurrence, http);
     } else if (checked) {
       await closeTask(http, taskId);
+      cache.dropFromBacklog(id);
     } else {
       await reopenTask(http, taskId);
     }
@@ -336,6 +343,16 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
           (await getProjects(http)).map((p) => ({ label: p.name, value: p.id })),
       },
       {
+        key: 'isDeleteInTodoist',
+        type: 'checkbox',
+        label: 'Also delete in Todoist when I delete a task here',
+        description:
+          'Off by default. Applies after the undo time, also in shared projects, and is permanent: Todoist has no ' +
+          'trash. For a recurring task only this occurrence goes: Todoist moves the series to its next date ' +
+          '(the occurrence counts as completed there). With this off and auto-import on, a task you delete here ' +
+          'comes back at the next check, because it is still in Todoist.',
+      },
+      {
         key: 'checkInterval',
         type: 'input',
         label: 'Check Todoist every',
@@ -439,6 +456,19 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     }),
 
     deletedStates: ['deleted'],
+
+    /** SP calls this after its undo window when a linked task is deleted. Opt-in. */
+    async deleteIssue(id, config, http) {
+      if (!(config as TodoistSyncConfig).isDeleteInTodoist) return;
+      const { taskId, occurrence } = parseIssueId(id);
+      if (occurrence) {
+        // Never delete the series; skip just this occurrence (closing moves the series to its next date).
+        await closeOccurrenceIfCurrent(id, taskId, occurrence, http);
+        return;
+      }
+      await deleteTask(http, taskId);
+      cache.dropFromBacklog(id);
+    },
 
     async updateIssue(id, changes, _config, http) {
       const { taskId, occurrence } = parseIssueId(id);

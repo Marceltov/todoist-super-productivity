@@ -644,6 +644,83 @@ describe('minor fixes', () => {
   });
 });
 
+describe('delete in Todoist (opt-in)', () => {
+  test('off by default: deleting in SP leaves Todoist alone', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.deleteIssue!('9', cfg(), http);
+    expect(calls).toHaveLength(0);
+  });
+
+  test('when enabled, the Todoist task is deleted', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.deleteIssue!('9', cfg({ isDeleteInTodoist: true }), http);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([`DELETE ${API}/tasks/9`]);
+  });
+
+  test('recurring: the series is never deleted; the deleted occurrence is skipped (closed → next date)', async () => {
+    const { provider, book } = await setup();
+    book.idToImport(rec('5', '2026-11-30', { completed_count: 2 }));
+    const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-11-30', { completed_count: 2 })] }));
+    await provider.deleteIssue!('5@2026-11-30', cfg({ isDeleteInTodoist: true }), http);
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(calls.some((c) => c.url === `${API}/tasks/5/close`)).toBe(true);
+    expect(book.isCompleted('5@2026-11-30')).toBe(true);
+  });
+
+  test('recurring: an occurrence already completed elsewhere is not closed again', async () => {
+    const { provider, book } = await setup();
+    book.idToImport(rec('5', '2026-11-30', { completed_count: 2 }));
+    const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-12-07', { completed_count: 3 })] }));
+    await provider.deleteIssue!('5@2026-11-30', cfg({ isDeleteInTodoist: true }), http);
+    expect(calls.some((c) => c.method === 'POST' || c.method === 'DELETE')).toBe(false);
+  });
+
+  test('a deleted occurrence is not re-imported from the cached backlog', async () => {
+    const { provider } = await setup();
+    const live = rec('5', '2026-11-30', { completed_count: 2 });
+    const { http } = fakeHttp(todoist({ filter: [live], active: [live] }));
+    expect((await provider.getNewIssuesForBacklog!(cfg(), http)).map((r) => r.id)).toEqual(['5@2026-11-30']);
+    await provider.deleteIssue!('5@2026-11-30', cfg({ isDeleteInTodoist: true }), http);
+    expect((await provider.getNewIssuesForBacklog!(cfg(), http)).map((r) => r.id)).toEqual([]);
+  });
+
+  test('a deleted one-off task is not re-imported from the cached backlog', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ filter: [task({ id: '9' })] }));
+    await provider.getNewIssuesForBacklog!(cfg(), http);
+    await provider.deleteIssue!('9', cfg({ isDeleteInTodoist: true }), http);
+    expect(await provider.getNewIssuesForBacklog!(cfg(), http)).toEqual([]);
+  });
+
+  test('a task ticked off in SP is not re-offered from the cached backlog', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(todoist({ filter: [task({ id: '9' })] }));
+    await provider.getNewIssuesForBacklog!(cfg(), http);
+    await provider.updateIssue!('9', { checked: true }, cfg(), http);
+    expect(await provider.getNewIssuesForBacklog!(cfg(), http)).toEqual([]);
+  });
+
+  test('recurring with the option off: Todoist is left alone', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(() => null);
+    await provider.deleteIssue!('5@2026-11-30', cfg(), http);
+    expect(calls).toHaveLength(0);
+  });
+
+  test('has an opt-in checkbox that explains the guard rails', async () => {
+    const { provider } = await setup();
+    const f = provider.configFields.find((x) => x.key === 'isDeleteInTodoist')!;
+    expect(f.type).toBe('checkbox');
+    expect(f.label).toBe('Also delete in Todoist when I delete a task here');
+    expect(f.description).toMatch(/permanent/i);
+    expect(f.description).toMatch(/recurring/i);
+    expect(f.description).toMatch(/next date/i);
+    expect(f.description).toMatch(/comes back/i); // off + auto-import: a locally deleted task is re-imported
+  });
+});
+
 describe('definition', () => {
   test('field mappings: everything both ways by default, no notes', async () => {
     const { provider } = await setup();

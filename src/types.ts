@@ -28,4 +28,5 @@ export interface TodoistSyncConfig {
   filterQuery?: string;
   checkInterval?: string;
   projectIds?: string[];
+  isDeleteInTodoist?: boolean;
 }

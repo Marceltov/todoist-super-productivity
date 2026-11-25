@@ -114,3 +114,12 @@ export const moveOccurrence = async (
     throw new Error(`Todoist rejected the date change: ${err}`);
   }
 };
+
+/** Deletes a task for good (Todoist has no trash). Already gone (404) counts as done. */
+export const deleteTask = async (http: PluginHttp, id: string): Promise<void> => {
+  try {
+    await withRetry(() => http.delete(`${API}/tasks/${id}`));
+  } catch (e) {
+    if ((e as { status?: number })?.status !== 404) throw e;
+  }
+};
