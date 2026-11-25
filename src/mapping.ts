@@ -42,13 +42,9 @@ export const toIssue = (task: TodoistTask, issueId: string, checked: boolean): P
   isRecurring: task.due?.is_recurring ? 'yes' : '',
 });
 
-export const toSearchResult = (task: TodoistTask, id: string = issueIdFor(task)): PluginSearchResult => {
-  const { dueWithTime } = dueFields(task.due);
-  return {
-    id,
-    title: task.content,
-    url: taskUrl(task.id),
-    description: task.description,
-    ...(dueWithTime !== undefined ? { dueWithTime } : {}),
-  };
-};
+/**
+ * A search/backlog result carries every field of a full issue: SP stores the synced fields of what was added as the
+ * push baseline, and with an empty baseline it skips pushes until the next refresh.
+ */
+export const toSearchResult = (task: TodoistTask, id: string = issueIdFor(task)): PluginSearchResult =>
+  toIssue(task, id, task.checked);

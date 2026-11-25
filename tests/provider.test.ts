@@ -139,6 +139,20 @@ describe('import', () => {
   });
 });
 
+describe('baseline on add', () => {
+  test('search and backlog results carry every synced field, so SP has a push baseline right after +', async () => {
+    const { provider } = await setup();
+    const t = task({ id: '9', content: 'Milk', due: due('2026-11-30'), duration: { amount: 30, unit: 'minute' } });
+    const { http } = fakeHttp(todoist({ filter: [t] }));
+    for (const [r] of [await provider.searchIssues('', cfg(), http), await provider.getNewIssuesForBacklog!(cfg(), http)]) {
+      expect(provider.extractSyncValues!(r as never)).toEqual({
+        checked: false, content: 'Milk', dueDay: '2026-11-30', dueWithTime: undefined, durationMs: 1_800_000,
+      });
+      expect(r).toMatchObject({ lastUpdated: Date.parse('2026-11-25T10:00:00Z') });
+    }
+  });
+});
+
 describe('refresh', () => {
   test('found one-off task maps to an issue; fresh cache avoids a second call', async () => {
     let now = 0;
