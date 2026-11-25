@@ -211,6 +211,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       : live?.due?.date.slice(0, 10) === occurrence;
     if (live && !live.checked && same) await closeTask(http, taskId);
     await book.markCompleted(id);
+    cache.dropFromBacklog(id); // or the cached import list would offer it again within the interval
   };
 
   const pushDone = async (id: string, taskId: string, occurrence: string | undefined, checked: boolean, http: PluginHttp) => {
@@ -219,6 +220,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       await closeOccurrenceIfCurrent(id, taskId, occurrence, http);
     } else if (checked) {
       await closeTask(http, taskId);
+      cache.dropFromBacklog(id);
     } else {
       await reopenTask(http, taskId);
     }
@@ -464,6 +466,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
         return;
       }
       await deleteTask(http, taskId);
+      cache.dropFromBacklog(id);
     },
 
     async updateIssue(id, changes, _config, http) {
