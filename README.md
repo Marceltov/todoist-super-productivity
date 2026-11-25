@@ -71,6 +71,10 @@ npm run build       # dist/plugin.js (one IIFE) + manifest + icon
 npm run pack        # todoist-sync-<version>.zip
 ```
 
+Every pull request builds an installable ZIP (download it from the CI run's artifacts). To release, set the same
+version in `package.json` and `src/manifest.json`, merge, then push a tag `vX.Y.Z`. GitHub Actions tests, builds and
+publishes the release with the ZIP.
+
 `scripts/verify-api.mjs` checks the Todoist API behaviour the plugin relies on, against a throwaway project whose name
 starts with `sp-test`. It reads a token from `.dev-token`, which is git-ignored.
 
