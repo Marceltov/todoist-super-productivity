@@ -65,6 +65,11 @@ const main = async (): Promise<void> => {
       getToken: () => PluginAPI.getSecret(TOKEN_KEY),
       book,
       cache: new RefreshCache(),
+      onConnectionError: (msg) => PluginAPI.showSnack({ msg, type: 'ERROR' }),
+      lastKnownStorage: {
+        load: () => PluginAPI.loadSyncedData('lastKnown'),
+        save: (data) => PluginAPI.persistDataSynced(data, 'lastKnown'),
+      },
       projectNameStorage: {
         load: () => PluginAPI.loadSyncedData('projectNames'),
         save: (data) => PluginAPI.persistDataSynced(data, 'projectNames'),

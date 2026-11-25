@@ -91,3 +91,25 @@ test('an abandoned open occurrence completed in Todoist does not block the serie
   expect(book.idToImport(rec('5', '2026-12-07', { completed_count: 3 }))).toBe('5@2026-12-07');
   expect(book.idToImport(rec('5', '2026-12-14', { completed_count: 3 }))).toBeNull();
 });
+
+test('a stored `completed` that is not a list is ignored on load', async () => {
+  const store = memory();
+  store.data = JSON.stringify({ open: {}, completed: 42 });
+  const book = await OccurrenceBook.load(store);
+  expect(book.isCompleted('5@2026-11-30')).toBe(false);
+  expect(book.idToImport(rec('5', '2026-11-30'))).toBe('5@2026-11-30');
+});
+
+test('saves are serialized, so the last save holds the latest state', async () => {
+  let data: string | null = null;
+  let call = 0;
+  const slowFirst: Storage = {
+    load: async () => data,
+    save: (d) => new Promise((r) => setTimeout(() => { data = d; r(); }, call++ === 0 ? 20 : 0)),
+  };
+  const book = await OccurrenceBook.load(slowFirst);
+  book.idToImport(rec('5', '2026-11-30'));
+  await book.markCompleted('5@2026-11-30');
+  await new Promise((r) => setTimeout(r, 40));
+  expect(JSON.parse(data!).completed).toEqual(['5@2026-11-30']);
+});

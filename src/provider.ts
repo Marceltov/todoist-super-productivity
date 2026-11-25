@@ -17,6 +17,10 @@ export interface ProviderDeps {
   getToken(): Promise<string | null>;
   book: OccurrenceBook;
   cache: RefreshCache;
+  /** Reports why Test Connection failed (shown to the user). */
+  onConnectionError?(message: string): void;
+  /** Persists the last known fields per task, so a task deleted in Todoist keeps its title and dates after a restart. */
+  lastKnownStorage?: Storage;
   /** Persists every Todoist project name seen, so tags of renamed projects are still never pushed as labels. */
   projectNameStorage?: Storage;
   /** Called with the Todoist look (colour, icon) of the tags of tasks just fetched. */
@@ -25,6 +29,35 @@ export interface ProviderDeps {
 
 // Tasks assigned to me, plus unassigned tasks in my own (non-shared) projects. Verified live 2026-11-25.
 const DEFAULT_FILTER = 'assigned to: me | (!assigned & !shared)';
+
+const MAX_PARALLEL_LOOKUPS = 5;
+
+/** Runs `fn` over `items` with at most `limit` calls in flight, keeping the order of results. */
+const mapLimit = async <T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> => {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+};
+
+/** A readable reason for a failed connection test. */
+const connectionError = (e: unknown): string => {
+  const err = e as { status?: number; message?: string; error?: { error?: string } | string };
+  const detail = typeof err?.error === 'string' ? err.error : err?.error?.error ?? err?.message ?? '';
+  if (err?.message?.includes('Filter query is longer')) return err.message;
+  if (err?.status === 401 || err?.status === 403) {
+    return 'The Todoist token was rejected. Set a new one in Settings → Plugins → Todoist (⚙).';
+  }
+  if (err?.status === 400) return `Todoist couldn't run the filter: ${detail}`;
+  if (!err?.status) return "Couldn't reach Todoist. Check the internet connection.";
+  return `Todoist answered with HTTP ${err.status}: ${detail}`;
+};
 
 const settings = (config: Record<string, unknown>) => {
   const c = config as TodoistSyncConfig;
@@ -52,19 +85,24 @@ const SYNC_FIELDS = ['checked', 'content', 'dueDay', 'dueWithTime', 'durationMs'
 export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinition {
   const { book, cache } = deps;
   let backlogKey = '';
-  let meta: { at: number; projects: Map<string, { name: string; color?: string }>; labelColors: Map<string, string | undefined> } | undefined;
+  let meta:
+    | { at: number; projects: Map<string, { name: string; color?: string }>; labelColors: Map<string, string | undefined>; missing: Set<string> }
+    | undefined;
 
   /** Project names/colours and label colours, fetched at most once per check interval (or for an unknown project). */
   const metaFor = async (http: PluginHttp, intervalMs: number, projectIds: string[]) => {
     await namesLoaded;
     const stale = !meta || Date.now() - meta.at >= intervalMs;
-    if (stale || projectIds.some((id) => !meta!.projects.has(id))) {
+    // Refetch for a project id not seen yet, but not again for one Todoist doesn't list (e.g. archived).
+    if (stale || projectIds.some((id) => !meta!.projects.has(id) && !meta!.missing.has(id))) {
       const [projects, labels] = await Promise.all([getProjects(http), getLabels(http)]);
       meta = {
         at: Date.now(),
         projects: new Map(projects.map((p) => [p.id, { name: p.name, color: p.color }] as const)),
         labelColors: new Map(labels.map((l) => [l.name, l.color] as const)),
+        missing: new Set<string>(),
       };
+      projectIds.forEach((id) => !meta!.projects.has(id) && meta!.missing.add(id));
       rememberProjectNames(projects.map((p) => p.name));
     }
     return meta!;
@@ -91,6 +129,32 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
   };
   const isProjectTag = (tag: string): boolean => knownProjectNames.has(tag);
   const withoutProjectTags = (tags: string[]): string[] => tags.filter((t) => !isProjectTag(t));
+  // Last known synced fields per task (persisted), used when a task disappears from Todoist.
+  const LAST_KNOWN_MAX = 500;
+  const lastKnown = new Map<string, Partial<PluginIssue>>();
+  const lastKnownLoaded = (async () => {
+    try {
+      const raw = await deps.lastKnownStorage?.load();
+      const entries = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(entries)) for (const [k, v] of entries) if (typeof k === 'string' && v) lastKnown.set(k, v);
+    } catch {
+      // unreadable: start empty
+    }
+  })();
+  const rememberLastKnown = (issues: PluginIssue[]) => {
+    let changed = false;
+    for (const i of issues) {
+      if (i.state === 'deleted') continue;
+      const entry = { title: i.title, content: i.content, dueDay: i.dueDay, dueWithTime: i.dueWithTime, durationMs: i.durationMs, labels: i.labels };
+      if (JSON.stringify(lastKnown.get(i.id)) === JSON.stringify(entry)) continue;
+      lastKnown.delete(i.id);
+      lastKnown.set(i.id, entry);
+      changed = true;
+    }
+    while (lastKnown.size > LAST_KNOWN_MAX) lastKnown.delete(lastKnown.keys().next().value as string);
+    if (changed) void deps.lastKnownStorage?.save(JSON.stringify([...lastKnown])).catch(() => undefined);
+  };
+
   /** issue id → its current project tag, so pulls and imports can add it back to SP's tags. */
   const projectTagById = new Map<string, string>();
   const rememberProjectTag = <T extends { id: string; projectTag?: unknown }>(issue: T): T => {
@@ -121,7 +185,7 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
 
   /** A task Todoist deleted. Keeps the last known fields so the title mapping never blanks the SP title. */
   const deletedIssue = (id: string): PluginIssue => {
-    const last = cache.get(id, Infinity);
+    const last = cache.get(id, Infinity) ?? (lastKnown.get(id) as PluginIssue | undefined);
     return {
       ...(last ?? {}),
       id,
@@ -193,18 +257,20 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     }
     if ('dueDay' in changes || 'dueWithTime' in changes) {
       const due = dueUpdate(id, changes);
-      if (due && !occurrence) {
+      // Removing the date of an occurrence is never pushed (it would end a series), so no lookup is needed then.
+      const live = due && occurrence && !('due_string' in due.body) ? await getTask(http, taskId) : null;
+      if (due && (!occurrence || (live && !live.due?.is_recurring))) {
+        // One-off task, or an occurrence whose task stopped recurring in Todoist: a plain due update.
         Object.assign(body, due.body);
         Object.assign(patch, due.patch);
-      } else if (due && occurrence && !('due_string' in due.body)) {
+      } else if (due && live?.due) {
         // Recurring: move just this occurrence and keep the series. Removing the date is never pushed (ends the series).
-        const live = await getTask(http, taskId);
-        if (live?.due?.is_recurring) {
-          await moveOccurrence(http, live, due.body.due_datetime
-            ? { date: `${String(due.body.due_datetime).slice(0, 19)}Z`, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }
-            : { date: String(due.body.due_date) });
-          Object.assign(patch, due.patch);
-        }
+        const liveTime = live.due.date.length > 10 ? live.due.date.slice(10) : ''; // e.g. "T09:00:00" or "T08:00:00Z"
+        await moveOccurrence(http, live, due.body.due_datetime
+          ? { date: `${String(due.body.due_datetime).slice(0, 19)}Z`, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+          // Day-only move of a timed recurrence keeps its time of day (a bare date would drop it; verified live).
+          : { date: `${String(due.body.due_date)}${liveTime}`, ...(liveTime && live.due.timezone ? { timezone: live.due.timezone } : {}) });
+        Object.assign(patch, due.patch);
       }
     }
     if (Object.keys(body).length > 0) await updateTask(http, taskId, body);
@@ -218,12 +284,13 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     const live = new Map((await getActiveTasks(http, taskIds)).map((t) => [t.id, t] as const));
     // The batch omits closed tasks; a single GET still returns them (or 404 when deleted).
     const missing = taskIds.filter((id) => !live.has(id));
-    const looked = await Promise.all(missing.map(async (id) => [id, await getTask(http, id)] as const));
+    const looked = await mapLimit(missing, MAX_PARALLEL_LOOKUPS, async (id) => [id, await getTask(http, id)] as const);
+    await lastKnownLoaded;
     const closedOrGone = new Map(looked);
     const found = [...live.values(), ...looked.flatMap(([, t]) => (t ? [t] : []))];
     const names = await projectNamesFor(http, intervalMs, found);
 
-    return parsed.map(({ id, taskId, occurrence }) => {
+    const issues = parsed.map(({ id, taskId, occurrence }) => {
       const t = live.get(taskId) ?? closedOrGone.get(taskId) ?? undefined;
       let issue: PluginIssue;
       if (!t) issue = deletedIssue(id);
@@ -232,6 +299,8 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       cache.set(rememberProjectTag(issue));
       return issue;
     });
+    rememberLastKnown(issues);
+    return issues;
   };
 
   const getByIds = async (ids: string[], config: Record<string, unknown>, http: PluginHttp): Promise<PluginIssue[]> => {
@@ -280,11 +349,15 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     },
 
     async testConnection(config, http) {
-      if (!(await deps.getToken())) return false;
+      if (!(await deps.getToken())) {
+        deps.onConnectionError?.('No Todoist token is set. Add it in Settings → Plugins → Todoist (⚙).');
+        return false;
+      }
       try {
         await filterTasks(http, settings(config).filter);
         return true;
-      } catch {
+      } catch (e) {
+        deps.onConnectionError?.(connectionError(e));
         return false;
       }
     },

@@ -23,6 +23,7 @@ const MAX_COMPLETED = 500;
 export class OccurrenceBook {
   private constructor(private state: OccurrenceState, private readonly storage: Storage) {}
 
+
   static async load(storage: Storage): Promise<OccurrenceBook> {
     let state: OccurrenceState = { open: {}, completed: [] };
     try {
@@ -32,7 +33,8 @@ export class OccurrenceBook {
         const open = Object.fromEntries(
           Object.entries(parsed.open ?? {}).filter(([, v]) => v && typeof v === 'object' && typeof v.id === 'string'),
         );
-        state = { open, completed: parsed.completed ?? [] };
+        const completed = Array.isArray(parsed.completed) ? parsed.completed.filter((c) => typeof c === 'string') : [];
+        state = { open, completed };
       }
     } catch {
       // Unreadable bookkeeping: start fresh. Worst case is one extra import that SP's id check deduplicates.
@@ -101,7 +103,13 @@ export class OccurrenceBook {
     return 'open';
   }
 
+  private saving: Promise<void> = Promise.resolve();
+
+  /** Saves one at a time; each save writes the state as it is when it runs, so the last save is the latest. */
   private persist(): Promise<void> {
-    return this.storage.save(JSON.stringify(this.state)).catch(() => undefined);
+    this.saving = this.saving
+      .then(() => this.storage.save(JSON.stringify(this.state)))
+      .catch(() => undefined);
+    return this.saving;
   }
 }

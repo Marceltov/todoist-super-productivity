@@ -8,15 +8,18 @@ import { type Call, fakeHttp, httpError } from './fake-http';
 
 const memoryStorage = () => { let d: string | null = null; return { load: async () => d, save: async (x: string) => { d = x; } }; };
 
-const setup = async (o: { token?: string | null; now?: () => number } = {}) => {
+const setup = async (o: { token?: string | null; now?: () => number; lastKnown?: ReturnType<typeof memoryStorage> } = {}) => {
   const book = await OccurrenceBook.load(memoryStorage());
   const cache = new RefreshCache(o.now ?? (() => 0));
   const styled: unknown[][] = [];
+  const errors: string[] = [];
   const provider = createProvider({
     getToken: async () => (o.token === undefined ? 'tok' : o.token), book, cache,
     onTagStyles: (styles) => styled.push(styles),
+    onConnectionError: (msg) => errors.push(msg),
+    lastKnownStorage: o.lastKnown,
   });
-  return { book, cache, provider, styled };
+  return { book, cache, provider, styled, errors };
 };
 const cfg = (o: Record<string, unknown> = {}) => ({ filterQuery: 'assigned to: me', checkInterval: '5m', ...o });
 const page = (results: unknown[]) => ({ results, next_cursor: null });
@@ -565,6 +568,79 @@ describe('review fixes', () => {
     await b.getByIds!(['3'], cfg(), fakeHttp(todoist({ active: [task({ id: '3', project_id: 'p2' })], projects: [{ id: 'p2', name: 'Other' }] })).http);
     const m = b.fieldMappings!.find((f) => f.taskField === 'tagIds')!;
     expect(m.toIssueValue(['Household', 'errands'], { issueId: '1' })).toEqual(['errands']);
+  });
+});
+
+describe('minor fixes', () => {
+  const syncCmd = (calls: Call[]) =>
+    (calls.find((c) => c.url === `${API}/sync`)?.body as { commands: { args: { due: Record<string, unknown> } }[] } | undefined)
+      ?.commands[0].args.due;
+
+  test('occurrence whose task stopped recurring → plain due update instead of a silent drop', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp((c) => (c.method === 'GET' ? task({ id: '5', due: due('2026-11-30') }) : null));
+    await provider.updateIssue!('5@2026-11-30', { dueDay: '2026-12-03' }, cfg(), http);
+    expect(calls.filter((c) => c.method === 'POST').map((c) => [c.url, c.body])).toEqual([[`${API}/tasks/5`, { due_date: '2026-12-03' }]]);
+  });
+
+  test('day-only move of a timed recurrence keeps the time of day (verified live)', async () => {
+    const { provider } = await setup();
+    const live = rec('5', '2026-11-30T09:00:00');
+    const { http, calls } = fakeHttp((c) => {
+      if (c.method === 'GET') return live;
+      const uuid = (c.body as { commands: { uuid: string }[] }).commands[0].uuid;
+      return { sync_status: { [uuid]: 'ok' } };
+    });
+    await provider.updateIssue!('5@2026-11-30', { dueDay: '2026-12-03' }, cfg(), http);
+    expect(syncCmd(calls)).toMatchObject({ date: '2026-12-03T09:00:00', string: 'every week', is_recurring: true });
+  });
+
+  test('testConnection says why it failed', async () => {
+    const none = await setup({ token: null });
+    await none.provider.testConnection!(cfg(), fakeHttp(() => null).http);
+    const bad = await setup();
+    await bad.provider.testConnection!(cfg(), fakeHttp(() => { throw httpError(401); }).http);
+    const filter = await setup();
+    await filter.provider.testConnection!(cfg(), fakeHttp(() => { throw Object.assign(httpError(400), { error: { error: 'Invalid filter' } }); }).http);
+    const offline = await setup();
+    await offline.provider.testConnection!(cfg(), fakeHttp(() => { throw httpError(0); }).http);
+    expect(none.errors[0]).toMatch(/no Todoist token/i);
+    expect(bad.errors[0]).toMatch(/token was rejected/i);
+    expect(filter.errors[0]).toMatch(/filter/i);
+    expect(offline.errors[0]).toMatch(/couldn.t reach Todoist/i);
+  });
+
+  test('a task in an unknown (e.g. archived) project does not refetch projects on every refresh', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(todoist({ active: [task({ id: '1', project_id: 'archived' }), task({ id: '2', project_id: 'archived' })], projects: [] }));
+    await provider.getByIds!(['1'], cfg(), http);
+    await provider.getByIds!(['2'], cfg(), http);
+    expect(calls.filter((c) => c.url.endsWith('/projects'))).toHaveLength(1);
+  });
+
+  test('single-task lookups run at most 5 at a time', async () => {
+    const { provider } = await setup();
+    let inFlight = 0, peak = 0;
+    const { http } = fakeHttp(async (c) => {
+      if (c.url === `${API}/tasks`) return page([]);
+      if (c.url.endsWith('/projects') || c.url.endsWith('/labels')) return page([]);
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      throw httpError(404);
+    });
+    await provider.getByIds!(Array.from({ length: 12 }, (_, i) => String(i)), cfg(), http);
+    expect(peak).toBeLessThanOrEqual(5);
+  });
+
+  test('a task deleted in Todoist keeps its last known title and dates, even after a restart', async () => {
+    const store = memoryStorage();
+    const a = await setup({ lastKnown: store });
+    await a.provider.getByIds!(['1'], cfg(), fakeHttp(todoist({ active: [task({ id: '1', content: 'Milk', due: due('2026-11-30') })] })).http);
+    await new Promise((r) => setTimeout(r, 0));
+    const b = await setup({ lastKnown: store });
+    const [gone] = await b.provider.getByIds!(['1'], cfg(), fakeHttp(todoist({})).http);
+    expect(gone).toMatchObject({ id: '1', state: 'deleted', title: 'Milk', content: 'Milk', dueDay: '2026-11-30' });
   });
 });
 

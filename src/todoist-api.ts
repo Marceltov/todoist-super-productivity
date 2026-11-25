@@ -88,7 +88,7 @@ export const closeTask = (http: PluginHttp, id: string): Promise<unknown> =>
 export const reopenTask = (http: PluginHttp, id: string): Promise<unknown> =>
   withRetry(() => http.post(`${API}/tasks/${id}/reopen`, {}));
 
-/** Updates task fields (POST /tasks/{id}). Used only for due dates: due_date, due_datetime or due_string "no date". */
+/** Updates task fields (POST /tasks/{id}): content, labels, duration, and due_date / due_datetime / due_string "no date". */
 export const updateTask = (http: PluginHttp, id: string, body: Record<string, unknown>): Promise<unknown> =>
   withRetry(() => http.post(`${API}/tasks/${id}`, body));
 
