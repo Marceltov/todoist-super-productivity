@@ -236,6 +236,23 @@ describe('push', () => {
     expect(later.book.isCompleted('6@2026-11-30')).toBe(true);
   });
 
+  test('recurring: ticking off a moved occurrence still closes it (same completed_count)', async () => {
+    const { provider, book } = await setup();
+    book.idToImport(rec('5', '2026-11-30', { completed_count: 1 }));
+    const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-12-02', { completed_count: 1 })] }));
+    await provider.updateIssue!('5@2026-11-30', { checked: true }, cfg(), http);
+    expect(calls.some((c) => c.url === `${API}/tasks/5/close`)).toBe(true);
+  });
+
+  test('recurring: already completed elsewhere (count went up) → no second close', async () => {
+    const { provider, book } = await setup();
+    book.idToImport(rec('5', '2026-11-30', { completed_count: 1 }));
+    const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-12-07', { completed_count: 2 })] }));
+    await provider.updateIssue!('5@2026-11-30', { checked: true }, cfg(), http);
+    expect(calls.some((c) => c.url.endsWith('/close'))).toBe(false);
+    expect(book.isCompleted('5@2026-11-30')).toBe(true);
+  });
+
   test('recurring: un-ticking does nothing in Todoist', async () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(() => null);
@@ -294,11 +311,47 @@ describe('push dates', () => {
     expect(push.calls).toHaveLength(0);
   });
 
-  test('recurring occurrences never get dates pushed (Todoist would drop the recurrence)', async () => {
+  const syncRoute = (live: TodoistTask, status: unknown = 'ok') => (c: Call) => {
+    if (c.method === 'GET') return live;
+    if (c.url === `${API}/sync`) {
+      const uuid = (c.body as { commands: { uuid: string }[] }).commands[0].uuid;
+      return { sync_status: { [uuid]: status } };
+    }
+    return null;
+  };
+
+  test('recurring: moving an occurrence keeps the recurrence (sync item_update with the series string)', async () => {
     const { provider } = await setup();
-    const { http, calls } = fakeHttp(() => null);
+    const { http, calls } = fakeHttp(syncRoute(rec('5', '2026-11-30')));
     await provider.updateIssue!('5@2026-11-30', { dueDay: '2026-12-03' }, cfg(), http);
+    const sync = calls.find((c) => c.url === `${API}/sync`)!;
+    const cmd = (sync.body as { commands: { type: string; uuid: string; args: unknown }[] }).commands[0];
+    expect(cmd.type).toBe('item_update');
+    expect(cmd.uuid).toBeTruthy();
+    expect(cmd.args).toEqual({ id: '5', due: { date: '2026-12-03', string: 'every week', lang: 'en', is_recurring: true } });
+    expect(calls.some((c) => c.url === `${API}/tasks/5` && c.method === 'POST')).toBe(false);
+  });
+
+  test('recurring: planning a time sends a UTC datetime with the local time zone', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(syncRoute(rec('5', '2026-11-30')));
+    await provider.updateIssue!('5@2026-11-30', { dueWithTime: Date.UTC(2026, 11, 3, 13), dueDay: null }, cfg(), http);
+    const args = (calls.find((c) => c.url === `${API}/sync`)!.body as { commands: { args: { due: Record<string, unknown> } }[] }).commands[0].args;
+    expect(args.due).toMatchObject({ date: '2026-12-03T13:00:00Z', string: 'every week', is_recurring: true,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+  });
+
+  test('recurring: removing the date is never pushed (it would end the series)', async () => {
+    const { provider } = await setup();
+    const { http, calls } = fakeHttp(syncRoute(rec('5', '2026-11-30')));
+    await provider.updateIssue!('5@2026-11-30', { dueDay: null }, cfg(), http);
     expect(calls).toHaveLength(0);
+  });
+
+  test('recurring: a failed sync command throws', async () => {
+    const { provider } = await setup();
+    const { http } = fakeHttp(syncRoute(rec('5', '2026-11-30'), { error: 'Invalid date' }));
+    await expect(provider.updateIssue!('5@2026-11-30', { dueDay: '2026-12-03' }, cfg(), http)).rejects.toThrow('Invalid date');
   });
 
   test('done and date in one change → both pushed', async () => {

@@ -57,6 +57,12 @@ export class OccurrenceBook {
     return id;
   }
 
+  /** completed_count of the task when this occurrence became open; undefined if it isn't the recorded open one. */
+  openCount(issueId: string): number | undefined {
+    const open = this.state.open[parseIssueId(issueId).taskId];
+    return open?.id === issueId ? open.count : undefined;
+  }
+
   isCompleted(issueId: string): boolean {
     return this.state.completed.includes(issueId);
   }

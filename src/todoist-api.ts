@@ -86,3 +86,26 @@ export const reopenTask = (http: PluginHttp, id: string): Promise<unknown> =>
 /** Updates task fields (POST /tasks/{id}). Used only for due dates: due_date, due_datetime or due_string "no date". */
 export const updateTask = (http: PluginHttp, id: string, body: Record<string, unknown>): Promise<unknown> =>
   withRetry(() => http.post(`${API}/tasks/${id}`, body));
+
+/**
+ * Moves the current occurrence of a recurring task and keeps the series: a Sync API item_update whose due carries
+ * the unchanged recurrence string (the REST due_date/due_datetime fields would end the series). Verified live.
+ */
+export const moveOccurrence = async (
+  http: PluginHttp,
+  task: TodoistTask,
+  due: { date: string; timezone?: string },
+): Promise<void> => {
+  const uuid = crypto.randomUUID();
+  const args = {
+    id: task.id,
+    due: { ...due, string: task.due?.string ?? '', lang: task.due?.lang ?? 'en', is_recurring: true },
+  };
+  const res = await withRetry(() =>
+    http.post<{ sync_status?: Record<string, unknown> }>(`${API}/sync`, { commands: [{ type: 'item_update', uuid, args }] }));
+  const status = res?.sync_status?.[uuid];
+  if (status !== 'ok') {
+    const err = (status as { error?: string } | undefined)?.error ?? JSON.stringify(status ?? res);
+    throw new Error(`Todoist rejected the date change: ${err}`);
+  }
+};

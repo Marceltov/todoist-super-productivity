@@ -1,7 +1,7 @@
 import type { TodoistDue, TodoistTask } from '../src/types';
 
 export const due = (date: string, o: Partial<TodoistDue> = {}): TodoistDue => ({
-  date, datetime: null, timezone: null, is_recurring: false, string: date, ...o,
+  date, datetime: null, timezone: null, is_recurring: false, string: date, lang: 'en', ...o,
 });
 export const task = (o: Partial<TodoistTask> = {}): TodoistTask => ({
   id: '1', content: 'Task', description: '', checked: false, completed_at: null,

@@ -8,7 +8,7 @@ import type {
 import { parseInterval, RefreshCache } from './interval';
 import { parseIssueId, taskUrl, toIssue, toSearchResult } from './mapping';
 import { OccurrenceBook } from './occurrences';
-import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, reopenTask, searchQuery, updateTask } from './todoist-api';
+import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, moveOccurrence, reopenTask, searchQuery, updateTask } from './todoist-api';
 import type { TodoistSyncConfig, TodoistTask } from './types';
 
 export interface ProviderDeps {
@@ -69,7 +69,12 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
     if (occurrence) {
       if (!checked) return; // reopening a recurring task would touch the shared list unpredictably
       const [live] = await getActiveTasks(http, [taskId]);
-      if (live && !live.checked && live.due?.date.slice(0, 10) === occurrence) await closeTask(http, taskId);
+      // Still the same occurrence? Use the completion counter (survives a moved date); fall back to the date.
+      const baseline = book.openCount(id);
+      const same = baseline !== undefined
+        ? (live?.completed_count ?? 0) === baseline
+        : live?.due?.date.slice(0, 10) === occurrence;
+      if (live && !live.checked && same) await closeTask(http, taskId);
       await book.markCompleted(id);
     } else if (checked) {
       await closeTask(http, taskId);
@@ -109,18 +114,25 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
       Object.assign(body, ms > 0 ? { duration: Math.max(1, Math.round(ms / 60_000)), duration_unit: 'minute' } : { duration: null });
       patch.durationMs = ms > 0 ? ms : 0;
     }
-    // Dates: never for recurring tasks, because setting a date through the API drops the recurrence.
-    if (!occurrence && ('dueDay' in changes || 'dueWithTime' in changes)) {
+    if ('dueDay' in changes || 'dueWithTime' in changes) {
       const due = dueUpdate(id, changes);
-      if (due) {
+      if (due && !occurrence) {
         Object.assign(body, due.body);
         Object.assign(patch, due.patch);
+      } else if (due && occurrence && !('due_string' in due.body)) {
+        // Recurring: move just this occurrence and keep the series. Removing the date is never pushed (ends the series).
+        const live = await getTask(http, taskId);
+        if (live?.due?.is_recurring) {
+          await moveOccurrence(http, live, due.body.due_datetime
+            ? { date: `${String(due.body.due_datetime).slice(0, 19)}Z`, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+            : { date: String(due.body.due_date) });
+          Object.assign(patch, due.patch);
+        }
       }
     }
-    if (Object.keys(body).length === 0) return;
-    await updateTask(http, taskId, body);
+    if (Object.keys(body).length > 0) await updateTask(http, taskId, body);
     const last = cache.get(id, Infinity);
-    if (last) cache.set({ ...last, ...patch });
+    if (last && Object.keys(patch).length > 0) cache.set({ ...last, ...patch });
   };
 
   const fetchIssues = async (ids: string[], http: PluginHttp): Promise<PluginIssue[]> => {

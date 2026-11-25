@@ -5,6 +5,7 @@ export interface TodoistDue {
   timezone?: string | null;
   is_recurring: boolean;
   string: string;
+  lang?: string;
 }
 
 export interface TodoistTask {
