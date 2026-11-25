@@ -659,10 +659,28 @@ describe('delete in Todoist (opt-in)', () => {
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([`DELETE ${API}/tasks/9`]);
   });
 
-  test('never for recurring tasks: that would delete the whole series', async () => {
+  test('recurring: the series is never deleted; the deleted occurrence is skipped (closed → next date)', async () => {
+    const { provider, book } = await setup();
+    book.idToImport(rec('5', '2026-11-30', { completed_count: 2 }));
+    const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-11-30', { completed_count: 2 })] }));
+    await provider.deleteIssue!('5@2026-11-30', cfg({ isDeleteInTodoist: true }), http);
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(calls.some((c) => c.url === `${API}/tasks/5/close`)).toBe(true);
+    expect(book.isCompleted('5@2026-11-30')).toBe(true);
+  });
+
+  test('recurring: an occurrence already completed elsewhere is not closed again', async () => {
+    const { provider, book } = await setup();
+    book.idToImport(rec('5', '2026-11-30', { completed_count: 2 }));
+    const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-12-07', { completed_count: 3 })] }));
+    await provider.deleteIssue!('5@2026-11-30', cfg({ isDeleteInTodoist: true }), http);
+    expect(calls.some((c) => c.method === 'POST' || c.method === 'DELETE')).toBe(false);
+  });
+
+  test('recurring with the option off: Todoist is left alone', async () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(() => null);
-    await provider.deleteIssue!('5@2026-11-30', cfg({ isDeleteInTodoist: true }), http);
+    await provider.deleteIssue!('5@2026-11-30', cfg(), http);
     expect(calls).toHaveLength(0);
   });
 
@@ -673,6 +691,7 @@ describe('delete in Todoist (opt-in)', () => {
     expect(f.label).toBe('Also delete in Todoist when I delete a task here');
     expect(f.description).toMatch(/permanent/i);
     expect(f.description).toMatch(/recurring/i);
+    expect(f.description).toMatch(/next date/i);
   });
 });
 

@@ -41,7 +41,8 @@ Requires the Super Productivity **desktop app 20 or newer**.
    - **Projects:** limit the import to some Todoist projects. Leave it empty for all.
    - **Also delete in Todoist when I delete a task here:** off by default. When on, deleting a linked task in Super
      Productivity deletes it in Todoist after the undo time, also in shared projects. This is permanent, because
-     Todoist has no trash. Recurring tasks are never deleted, because that would delete the whole series.
+     Todoist has no trash. For a recurring task only that occurrence goes: Todoist moves the series to its next date,
+     and the occurrence counts as completed there. The series itself is never deleted.
    - **Check Todoist every:** for example `5m` or `1h 30m` (default 5 minutes, minimum 1 minute).
    - **Two-Way Sync:** every field syncs **both ways** by default. You can change each field there. Tick
      **Auto-create tags** so labels and projects that don't exist as tags yet are created.
