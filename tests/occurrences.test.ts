@@ -33,29 +33,37 @@ test('peekId does not record anything', async () => {
   expect(book.peekId(rec('5', '2026-12-14'))).toBeNull();
 });
 
-test('rescheduled occurrence stays open', async () => {
+test('rescheduled occurrence (same completed_count) stays open', async () => {
   const book = await OccurrenceBook.load(memory());
-  expect(book.resolve('5@2026-11-30', rec('5', '2026-12-01'), new Set())).toBe('open');
+  book.idToImport(rec('5', '2026-11-30', { completed_count: 2 }));
+  expect(book.resolve('5@2026-11-30', rec('5', '2026-12-01', { completed_count: 2 }))).toBe('open');
 });
 
-test('advanced with a completion record is done and frees the task', async () => {
+test('completed_count went up → done, and the next occurrence can import', async () => {
   const book = await OccurrenceBook.load(memory());
-  book.idToImport(rec('5', '2026-11-30'));
-  expect(book.resolve('5@2026-11-30', rec('5', '2026-12-07'), new Set(['5']))).toBe('done');
-  expect(book.idToImport(rec('5', '2026-12-07'))).toBe('5@2026-12-07');
+  book.idToImport(rec('5', '2026-11-30', { completed_count: 2 }));
+  expect(book.resolve('5@2026-11-30', rec('5', '2026-12-07', { completed_count: 3 }))).toBe('done');
+  expect(book.idToImport(rec('5', '2026-12-07', { completed_count: 3 }))).toBe('5@2026-12-07');
 });
 
-test('same date and unchecked is open; checked is done; missing is unknown', async () => {
+test('completion detected even if Todoist kept the same date', async () => {
   const book = await OccurrenceBook.load(memory());
-  expect(book.resolve('5@2026-11-30', rec('5', '2026-11-30'), new Set())).toBe('open');
-  expect(book.resolve('6@2026-11-30', rec('6', '2026-11-30', { checked: true }), new Set())).toBe('done');
-  expect(book.resolve('7@2026-11-30', undefined, new Set())).toBe('unknown');
+  book.idToImport(rec('5', '2026-11-30', { completed_count: 0 }));
+  expect(book.resolve('5@2026-11-30', rec('5', '2026-11-30', { completed_count: 1 }))).toBe('done');
 });
 
-test('an open occurrence seen in resolve becomes the task\'s open one', async () => {
+test('same date and unchanged count is open; checked is done; missing is unknown', async () => {
   const book = await OccurrenceBook.load(memory());
-  book.resolve('5@2026-11-30', rec('5', '2026-11-30'), new Set());
+  expect(book.resolve('5@2026-11-30', rec('5', '2026-11-30'))).toBe('open');
+  expect(book.resolve('6@2026-11-30', rec('6', '2026-11-30', { checked: true }))).toBe('done');
+  expect(book.resolve('7@2026-11-30', undefined)).toBe('unknown');
+});
+
+test('an open occurrence first seen in resolve records its count as the baseline', async () => {
+  const book = await OccurrenceBook.load(memory());
+  expect(book.resolve('5@2026-11-30', rec('5', '2026-12-01', { completed_count: 4 }))).toBe('open');
   expect(book.idToImport(rec('5', '2026-12-07'))).toBeNull();
+  expect(book.resolve('5@2026-11-30', rec('5', '2026-12-08', { completed_count: 5 }))).toBe('done');
 });
 
 test('state survives reload', async () => {

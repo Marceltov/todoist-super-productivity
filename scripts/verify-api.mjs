@@ -84,3 +84,31 @@ log('(d) bad token body keys', keys(bad.json));
 
 // rate-limit headers, if any
 log('rate-limit headers', [...filter.headers.keys()].filter((h) => /rate|retry/i.test(h)).join(', ') || 'none');
+
+// (e) recurring counters: does completed_count / postponed_count tell "completed" from "rescheduled"?
+const post = async (path, body) => {
+  const res = await fetch(API + path, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const text = await res.text();
+  return { status: res.status, json: text ? JSON.parse(text) : null };
+};
+const counters = async (id) => {
+  const t = (await call('GET', `/tasks/${id}`)).json;
+  return `due ${t?.due?.date} completed_count ${t?.completed_count} postponed_count ${t?.postponed_count}`;
+};
+log('(e) recurring now', await counters(recurring.id));
+log('(e) close recurring again', (await call('POST', `/tasks/${recurring.id}/close`)).status);
+log('(e) after close', await counters(recurring.id));
+const cur = (await call('GET', `/tasks/${recurring.id}`)).json;
+const next = new Date(`${cur.due.date.slice(0, 10)}T12:00:00`); next.setDate(next.getDate() + 1);
+const nextDate = next.toISOString().slice(0, 10);
+log('(e) reschedule occurrence by one day', (await post(`/tasks/${recurring.id}`, { due_date: nextDate })).status);
+log('(e) after reschedule', await counters(recurring.id));
+log('(e) is still recurring', String((await call('GET', `/tasks/${recurring.id}`)).json?.due?.is_recurring));
+
+// (f) deleted task: what does GET /tasks/{id} return?
+const tmp = await post('/tasks', { content: 'sp-test temp (delete me)', project_id: project.id });
+log('(f) create temp', tmp.status);
+const del = await fetch(`${API}/tasks/${tmp.json.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+log('(f) delete temp', del.status);
+const gone = await call('GET', `/tasks/${tmp.json.id}`);
+log('(f) GET deleted task: status / is_deleted / checked', `${gone.status} / ${gone.json?.is_deleted} / ${gone.json?.checked}`);

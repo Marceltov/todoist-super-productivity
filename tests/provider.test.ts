@@ -18,14 +18,20 @@ const cfg = (o: Record<string, unknown> = {}) => ({ filterQuery: 'assigned to: m
 const page = (results: unknown[]) => ({ results, next_cursor: null });
 
 /** Routes fake Todoist calls: filter results, active tasks by id, completed items. */
-const todoist = (d: { filter?: TodoistTask[]; active?: TodoistTask[]; completed?: { task_id: string }[]; projects?: unknown[] }) =>
+/** Routes fake Todoist calls. `active`: open tasks; `closed`: closed tasks (only GET /tasks/{id} returns them). */
+const todoist = (d: { filter?: TodoistTask[]; active?: TodoistTask[]; closed?: TodoistTask[]; projects?: unknown[] }) =>
   (c: Call) => {
     if (c.url === `${API}/tasks/filter`) return page(d.filter ?? []);
     if (c.url === `${API}/tasks`) {
       const ids = c.params!.ids.split(',');
       return page((d.active ?? []).filter((t) => ids.includes(t.id)));
     }
-    if (c.url === `${API}/tasks/completed/by_completion_date`) return { items: d.completed ?? [], next_cursor: null };
+    const single = c.method === 'GET' && c.url.match(/\/tasks\/([^/]+)$/);
+    if (single) {
+      const t = [...(d.active ?? []), ...(d.closed ?? [])].find((x) => x.id === single[1]);
+      if (!t) throw httpError(404);
+      return t;
+    }
     if (c.url === `${API}/projects`) return page(d.projects ?? []);
     return null;
   };
@@ -137,22 +143,22 @@ describe('refresh', () => {
 
   test('getById returns one issue, throws when nothing comes back', async () => {
     const { provider } = await setup();
-    const { http } = fakeHttp(todoist({ active: [task({ id: '1' })], completed: [] }));
+    const { http } = fakeHttp(todoist({ active: [task({ id: '1' })] }));
     expect((await provider.getById('1', cfg(), http)).id).toBe('1');
     const p = await setup();
     const err = fakeHttp(() => { throw httpError(500); });
     await expect(p.provider.getById('2', cfg(), err.http)).rejects.toThrow();
   });
 
-  test('missing + in completed list → checked true', async () => {
+  test('closed in Todoist (not in batch, single get says checked) → checked true', async () => {
     const { provider } = await setup();
-    const { http } = fakeHttp(todoist({ active: [], completed: [{ task_id: '1' }] }));
-    expect((await provider.getByIds!(['1'], cfg(), http))[0]).toMatchObject({ id: '1', checked: true, state: 'done' });
+    const { http } = fakeHttp(todoist({ closed: [task({ id: '1', content: 'Milk', checked: true })] }));
+    expect((await provider.getByIds!(['1'], cfg(), http))[0]).toMatchObject({ id: '1', title: 'Milk', checked: true, state: 'done' });
   });
 
-  test('missing + not in completed list → state deleted', async () => {
+  test('deleted in Todoist (404) → state deleted', async () => {
     const { provider } = await setup();
-    const { http } = fakeHttp(todoist({ active: [], completed: [] }));
+    const { http } = fakeHttp(todoist({}));
     expect((await provider.getByIds!(['1'], cfg(), http))[0]).toMatchObject({ id: '1', state: 'deleted' });
     expect(provider.deletedStates).toEqual(['deleted']);
   });
@@ -164,27 +170,29 @@ describe('refresh', () => {
     expect(book.isCompleted('5@2026-11-30')).toBe(false);
   });
 
-  test('error while reading completions also propagates', async () => {
+  test('error while looking up a missing task propagates (never "deleted")', async () => {
     const { provider } = await setup();
-    const { http } = fakeHttp((c) => { if (c.url.includes('completed')) throw httpError(500); return page([]); });
+    const { http } = fakeHttp((c) => { if (c.url === `${API}/tasks/1`) throw httpError(500); return page([]); });
     await expect(provider.getByIds!(['1'], cfg(), http)).rejects.toThrow('HTTP 500');
   });
 
-  test('recurring moved with completion → done; moved without → open with new due', async () => {
+  test('recurring completed in Todoist (count up) → done; rescheduled (count same) → open with new due', async () => {
     const a = await setup();
-    const done = fakeHttp(todoist({ active: [rec('5', '2026-12-07')], completed: [{ task_id: '5' }] }));
+    a.book.idToImport(rec('5', '2026-11-30', { completed_count: 1 }));
+    const done = fakeHttp(todoist({ active: [rec('5', '2026-12-07', { completed_count: 2 })] }));
     expect((await a.provider.getByIds!(['5@2026-11-30'], cfg(), done.http))[0]).toMatchObject({ id: '5@2026-11-30', checked: true });
     const b = await setup();
-    const moved = fakeHttp(todoist({ active: [rec('5', '2026-12-01')], completed: [] }));
+    b.book.idToImport(rec('5', '2026-11-30', { completed_count: 1 }));
+    const moved = fakeHttp(todoist({ active: [rec('5', '2026-12-01', { completed_count: 1 })] }));
     expect((await b.provider.getByIds!(['5@2026-11-30'], cfg(), moved.http))[0])
       .toMatchObject({ id: '5@2026-11-30', checked: false, dueDay: '2026-12-01' });
   });
 
-  test('recurring on its date does not query completions', async () => {
+  test('recurring present in batch needs no single lookups', async () => {
     const { provider } = await setup();
     const { http, calls } = fakeHttp(todoist({ active: [rec('5', '2026-11-30')] }));
     await provider.getByIds!(['5@2026-11-30'], cfg(), http);
-    expect(calls.some((c) => c.url.includes('completed'))).toBe(false);
+    expect(calls).toHaveLength(1);
   });
 });
 

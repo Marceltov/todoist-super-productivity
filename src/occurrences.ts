@@ -8,7 +8,8 @@ import type { TodoistTask } from './types';
  * creating a duplicate.
  */
 export interface OccurrenceState {
-  open: Record<string, string>; // todoistTaskId -> open SP issue id
+  /** todoistTaskId -> the open SP issue id and the task's completed_count when it became open */
+  open: Record<string, { id: string; count: number }>;
   completed: string[]; // issue ids known completed (most recent last)
 }
 
@@ -28,7 +29,10 @@ export class OccurrenceBook {
       const raw = await storage.load();
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<OccurrenceState>;
-        state = { open: parsed.open ?? {}, completed: parsed.completed ?? [] };
+        const open = Object.fromEntries(
+          Object.entries(parsed.open ?? {}).filter(([, v]) => v && typeof v === 'object' && typeof v.id === 'string'),
+        );
+        state = { open, completed: parsed.completed ?? [] };
       }
     } catch {
       // Unreadable bookkeeping: start fresh. Worst case is one extra import that SP's id check deduplicates.
@@ -40,14 +44,14 @@ export class OccurrenceBook {
   peekId(task: TodoistTask): string | null {
     const id = issueIdFor(task);
     const open = this.state.open[task.id];
-    return !open || open === id || this.isCompleted(open) ? id : null;
+    return !open || open.id === id || this.isCompleted(open.id) ? id : null;
   }
 
   /** Like peekId, and records the returned id as the task's open occurrence (backlog import). */
   idToImport(task: TodoistTask): string | null {
     const id = this.peekId(task);
-    if (id && this.state.open[task.id] !== id) {
-      this.state.open[task.id] = id;
+    if (id && this.state.open[task.id]?.id !== id) {
+      this.state.open[task.id] = { id, count: task.completed_count ?? 0 };
       void this.persist();
     }
     return id;
@@ -62,23 +66,27 @@ export class OccurrenceBook {
       this.state.completed = [...this.state.completed, issueId].slice(-MAX_COMPLETED);
     }
     const { taskId } = parseIssueId(issueId);
-    if (this.state.open[taskId] === issueId) delete this.state.open[taskId];
+    if (this.state.open[taskId]?.id === issueId) delete this.state.open[taskId];
     await this.persist();
   }
 
-  /** Done-ness of an occurrence, from the live base task and the ids of tasks completed since it was due. */
-  resolve(issueId: string, live: TodoistTask | undefined, completedTaskIds: Set<string>): 'open' | 'done' | 'unknown' {
+  /**
+   * Done-ness of an occurrence from the live base task. Todoist increments completed_count on every completion,
+   * and only postponed_count on a reschedule, so a higher count than when the occurrence became open means done.
+   */
+  resolve(issueId: string, live: TodoistTask | undefined): 'open' | 'done' | 'unknown' {
     if (this.isCompleted(issueId)) return 'done';
     if (!live) return 'unknown';
-    const { taskId, occurrence } = parseIssueId(issueId);
-    const moved = live.due?.date.slice(0, 10) !== occurrence;
-    if (live.checked || (moved && completedTaskIds.has(taskId))) {
+    const { taskId } = parseIssueId(issueId);
+    const count = live.completed_count ?? 0;
+    const open = this.state.open[taskId];
+    if (live.checked || (open?.id === issueId && count > open.count)) {
       void this.markCompleted(issueId);
       return 'done';
     }
-    // Same date, or moved without a completion record: a reschedule. The SP task keeps its id.
-    if (!this.state.open[taskId]) {
-      this.state.open[taskId] = issueId;
+    if (!open) {
+      // First sighting (e.g. added via search): today's count is the baseline.
+      this.state.open[taskId] = { id: issueId, count };
       void this.persist();
     }
     return 'open';

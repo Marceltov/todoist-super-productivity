@@ -8,28 +8,16 @@ import type {
 import { parseInterval, RefreshCache } from './interval';
 import { parseIssueId, taskUrl, toIssue, toSearchResult } from './mapping';
 import { OccurrenceBook } from './occurrences';
-import {
-  closeTask,
-  type Completion,
-  filterTasks,
-  getActiveTasks,
-  getCompletedSince,
-  getProjects,
-  reopenTask,
-  searchQuery,
-} from './todoist-api';
+import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, reopenTask, searchQuery } from './todoist-api';
 import type { TodoistSyncConfig, TodoistTask } from './types';
 
 export interface ProviderDeps {
   getToken(): Promise<string | null>;
   book: OccurrenceBook;
   cache: RefreshCache;
-  now?: () => number;
 }
 
 const DEFAULT_FILTER = 'assigned to: me';
-const DAY_MS = 86_400_000;
-const MISSING_LOOKBACK_MS = 30 * DAY_MS;
 
 const settings = (config: Record<string, unknown>) => {
   const c = config as TodoistSyncConfig;
@@ -56,21 +44,18 @@ const SYNC_FIELDS = ['checked', 'content', 'dueDay', 'dueWithTime', 'durationMs'
 
 export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinition {
   const { book, cache } = deps;
-  const now = deps.now ?? Date.now;
   let backlogKey = '';
 
-  /** An issue for a task Todoist no longer lists as active; keeps the last known fields so nothing gets blanked. */
-  const goneIssue = (id: string, state: 'done' | 'deleted', completion?: Completion): PluginIssue => {
+  /** A task Todoist deleted. Keeps the last known fields so the title mapping never blanks the SP title. */
+  const deletedIssue = (id: string): PluginIssue => {
     const last = cache.get(id, Infinity);
-    const title = last?.title ?? completion?.content ?? '';
     return {
       ...(last ?? {}),
       id,
-      title,
-      content: last?.content ?? completion?.content ?? title,
+      title: last?.title ?? '',
       url: taskUrl(parseIssueId(id).taskId),
-      state,
-      checked: state === 'done' ? true : (last?.checked ?? false),
+      state: 'deleted',
+      checked: last?.checked ?? false,
     };
   };
 
@@ -81,38 +66,19 @@ export function createProvider(deps: ProviderDeps): IssueProviderPluginDefinitio
 
   const fetchIssues = async (ids: string[], http: PluginHttp): Promise<PluginIssue[]> => {
     const parsed = ids.map((id) => ({ id, ...parseIssueId(id) }));
-    const live = new Map(
-      (await getActiveTasks(http, [...new Set(parsed.map((p) => p.taskId))])).map((t) => [t.id, t] as const),
-    );
-
-    // Completions are only needed for tasks that vanished or recurring tasks whose date moved.
-    let since = Infinity;
-    for (const p of parsed) {
-      const t = live.get(p.taskId);
-      if (!t) since = Math.min(since, now() - MISSING_LOOKBACK_MS);
-      else if (p.occurrence && !book.isCompleted(p.id) && t.due?.date.slice(0, 10) !== p.occurrence) {
-        since = Math.min(since, new Date(`${p.occurrence}T00:00:00`).getTime() - DAY_MS);
-      }
-    }
-    const completions = Number.isFinite(since) ? await getCompletedSince(http, new Date(since).toISOString()) : [];
-    const completedById = new Map(completions.map((c) => [c.task_id, c] as const));
-    const completedIds = new Set(completedById.keys());
+    const taskIds = [...new Set(parsed.map((p) => p.taskId))];
+    const live = new Map((await getActiveTasks(http, taskIds)).map((t) => [t.id, t] as const));
+    // The batch omits closed tasks; a single GET still returns them (or 404 when deleted).
+    const missing = taskIds.filter((id) => !live.has(id));
+    const looked = await Promise.all(missing.map(async (id) => [id, await getTask(http, id)] as const));
+    const closedOrGone = new Map(looked);
 
     return parsed.map(({ id, taskId, occurrence }) => {
-      const t = live.get(taskId);
+      const t = live.get(taskId) ?? closedOrGone.get(taskId) ?? undefined;
       let issue: PluginIssue;
-      if (occurrence) {
-        const state = book.resolve(id, t, completedIds);
-        if (state === 'unknown') {
-          issue = completedIds.has(taskId) ? goneIssue(id, 'done', completedById.get(taskId)) : goneIssue(id, 'deleted');
-        } else {
-          issue = t ? toIssue(t, id, state === 'done') : goneIssue(id, 'done');
-        }
-      } else if (t) {
-        issue = toIssue(t, id, t.checked);
-      } else {
-        issue = completedIds.has(taskId) ? goneIssue(id, 'done', completedById.get(taskId)) : goneIssue(id, 'deleted');
-      }
+      if (!t) issue = deletedIssue(id);
+      else if (occurrence) issue = toIssue(t, id, book.resolve(id, t) === 'done');
+      else issue = toIssue(t, id, t.checked);
       cache.set(issue);
       return issue;
     });

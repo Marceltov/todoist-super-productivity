@@ -17,6 +17,8 @@ export interface TodoistTask {
   due: TodoistDue | null;
   duration: { amount: number; unit: 'minute' | 'day' } | null;
   project_id: string;
+  /** Increments on every completion, also for recurring tasks (verified live 2026-11-25). */
+  completed_count?: number;
 }
 
 /** Non-secret provider settings, as SP stores them in the synced provider config. */

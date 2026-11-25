@@ -1,4 +1,4 @@
-import { closeTask, filterTasks, getActiveTasks, getCompletedSince, getProjects, reopenTask, searchQuery, withRetry } from '../src/todoist-api';
+import { closeTask, filterTasks, getActiveTasks, getProjects, getTask, reopenTask, searchQuery, withRetry } from '../src/todoist-api';
 import { fakeHttp, httpError } from './fake-http';
 import { task } from './factories';
 
@@ -42,13 +42,15 @@ test('getActiveTasks with no ids makes no request', async () => {
   expect(calls).toHaveLength(0);
 });
 
-test('getCompletedSince queries by completion date and returns items', async () => {
-  const { http, calls } = fakeHttp(() => ({ items: [{ task_id: '5', completed_at: '2026-11-30T10:00:00Z' }], next_cursor: null }));
-  const items = await getCompletedSince(http, '2026-11-01T00:00:00Z');
-  expect(items).toEqual([{ task_id: '5', completed_at: '2026-11-30T10:00:00Z' }]);
-  expect(calls[0]).toMatchObject({ url: `${API}/tasks/completed/by_completion_date` });
-  expect(calls[0].params).toMatchObject({ since: '2026-11-01T00:00:00Z' });
-  expect(calls[0].params!.until).toBeTruthy();
+test('getTask returns the task, also when it is closed', async () => {
+  const { http, calls } = fakeHttp(() => task({ id: '5', checked: true }));
+  expect(await getTask(http, '5')).toMatchObject({ id: '5', checked: true });
+  expect(calls[0]).toMatchObject({ method: 'GET', url: `${API}/tasks/5` });
+});
+
+test('getTask returns null for a deleted task (404), rethrows other errors', async () => {
+  expect(await getTask(fakeHttp(() => { throw httpError(404); }).http, '5')).toBeNull();
+  await expect(getTask(fakeHttp(() => { throw httpError(500); }).http, '5')).rejects.toThrow('HTTP 500');
 });
 
 test('getProjects follows the cursor', async () => {
